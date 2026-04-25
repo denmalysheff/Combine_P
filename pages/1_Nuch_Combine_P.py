@@ -106,15 +106,16 @@ if uploaded_file and df_struct is not None:
         current_date = datetime.now().strftime("%d_%m_%Y")
         file_name = f"Nuch_Report_{current_date}.xlsx"
         
+        # Колонки для вкладок КМ
+        target_cols = ["КОДНАПР", "ПУТЬ", "ПД", "КМ", "ОЦЕНКА", "ПРИЧИНА"]
+        
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
             results_df.to_excel(writer, sheet_name='Итоги_Nуч', index=False)
             
-            # Колонки для вкладок КМ по вашему запросу
-            target_cols = ["КОДНАПР", "ПУТЬ", "ПД", "КМ", "ОЦЕНКА", "ПРИЧИНА"]
-            
             for score, s_name in {5: "Отличные", 4: "Хорошие", 3: "Удовл", 2: "Неуд"}.items():
                 subset = df_eval[df_eval["ОЦЕНКА"] == score]
+                # Явно проверяем наличие колонки КМ и остальных
                 available_cols = [c for c in target_cols if c in subset.columns]
                 subset_to_save = subset[available_cols]
                 subset_to_save.to_excel(writer, sheet_name=s_name, index=False)
@@ -139,14 +140,10 @@ if uploaded_file and df_struct is not None:
         with tabs[0]:
             st.dataframe(style_results(results_df), use_container_width=True, height=550)
 
-        # Колонки для отображения во вкладках
-        display_cols = ["КОДНАПР", "ПУТЬ", "ПД", "КМ", "ОЦЕНКА", "ПРИЧИНА"]
-
         for i, score in enumerate([5, 4, 3, 2]):
             with tabs[i+1]:
                 subset = df_eval[df_eval["ОЦЕНКА"] == score]
-                # Фильтруем только те колонки, которые есть в данных
-                available_display = [c for c in display_cols if c in subset.columns]
+                available_display = [c for c in target_cols if c in subset.columns]
                 
                 if not subset.empty:
                     st.dataframe(subset[available_display], use_container_width=True)
