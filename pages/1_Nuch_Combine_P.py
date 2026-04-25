@@ -72,7 +72,6 @@ if uploaded_file and df_struct is not None:
         df_raw = pd.read_excel(uploaded_file, sheet_name="Оценка КМ")
         df_raw.columns = [str(col).strip().upper() for col in df_raw.columns]
         
-        # Фильтрация и подготовка данных
         main_codes = ['24701', '24602', '24603']
         df_eval = df_raw[df_raw["КОДНАПР"].astype(str).isin(main_codes)].copy()
         pd_plan_map = df_struct.groupby('ПД')['ПЛАН_ДЛИНА'].sum().to_dict()
@@ -101,7 +100,7 @@ if uploaded_file and df_struct is not None:
 
         results_df = pd.DataFrame(final_stats)
 
-        # --- ПОДГОТОВКА EXCEL С ВЫРАВНИВАНИЕМ ---
+        # --- ЭКСПОРТ EXCEL ---
         st.markdown("### 📝 Шаг 2: Анализ и экспорт")
         
         current_date = datetime.now().strftime("%d_%m_%Y")
@@ -111,17 +110,15 @@ if uploaded_file and df_struct is not None:
         with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
             results_df.to_excel(writer, sheet_name='Итоги_Nуч', index=False)
             
-            # Колонки для вкладок КМ
+            # Колонки для вкладок КМ по вашему запросу
             target_cols = ["КОДНАПР", "ПУТЬ", "ПД", "КМ", "ОЦЕНКА", "ПРИЧИНА"]
             
             for score, s_name in {5: "Отличные", 4: "Хорошие", 3: "Удовл", 2: "Неуд"}.items():
                 subset = df_eval[df_eval["ОЦЕНКА"] == score]
-                # Оставляем только существующие из списка целевых колонок
                 available_cols = [c for c in target_cols if c in subset.columns]
                 subset_to_save = subset[available_cols]
                 subset_to_save.to_excel(writer, sheet_name=s_name, index=False)
             
-            # Форматирование (Выравнивание по центру)
             from openpyxl.styles import Alignment
             for sheetname in writer.sheets:
                 ws = writer.sheets[sheetname]
@@ -136,18 +133,23 @@ if uploaded_file and df_struct is not None:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
-        # --- ТАБЛИЦЫ В ИНТЕРФЕЙСЕ ---
+        # --- ТАБЛИЦЫ ---
         tabs = st.tabs(["📊 Итоги Nуч", "✅ Отличные", "⭐ Хорошие", "⚠️ Удовл.", "🚨 Неуд"])
         
         with tabs[0]:
             st.dataframe(style_results(results_df), use_container_width=True, height=550)
 
+        # Колонки для отображения во вкладках
+        display_cols = ["КОДНАПР", "ПУТЬ", "ПД", "КМ", "ОЦЕНКА", "ПРИЧИНА"]
+
         for i, score in enumerate([5, 4, 3, 2]):
             with tabs[i+1]:
                 subset = df_eval[df_eval["ОЦЕНКА"] == score]
-                available_cols = [c for c in target_cols if c in subset.columns]
+                # Фильтруем только те колонки, которые есть в данных
+                available_display = [c for c in display_cols if c in subset.columns]
+                
                 if not subset.empty:
-                    st.dataframe(subset[available_cols], use_container_width=True)
+                    st.dataframe(subset[available_display], use_container_width=True)
                 else:
                     st.info(f"Километров с оценкой {score} не обнаружено.")
 
