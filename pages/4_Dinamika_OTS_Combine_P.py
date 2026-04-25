@@ -66,8 +66,8 @@ def make_date(df):
 # ==============================
 st.title("📊 Рост отступлений")
 
-file1 = st.file_uploader("Загрузите Файл 1", type=["xlsx"])
-file2 = st.file_uploader("Загрузите Файл 2", type=["xlsx"])
+file1 = st.file_uploader("Загрузите файл предыдущей проверки", type=["xlsx"])
+file2 = st.file_uploader("Загрузите файл текущей проверки", type=["xlsx"])
 
 tolerance = st.number_input("Допуск (м)", value=3)
 
