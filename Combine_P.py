@@ -28,9 +28,9 @@ col5, _ = st.columns(2)
 # --- МОДУЛЬ 1 ---
 with col1:
     st.markdown('<div class="module-card">', unsafe_allow_html=True)
-    st.subheader("📊 Динамика КМ")
-    st.write("Сравнение файлов Excel и анализ изменения оценок состояния пути.")
-    if st.button("Открыть Модуль КМ", key="btn1", use_container_width=True):
+    st.subheader("📊 Калькулятор Nuch")
+    st.write("Расчет балловой оценки состояния пути.")
+    if st.button("Открыть Модуль Nuch", key="btn1", use_container_width=True):
         st.switch_page("pages/1_Km.py")
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -58,7 +58,7 @@ with col4:
     st.markdown('<div class="module-card">', unsafe_allow_html=True)
     st.subheader("📅 Dinamika_OTS_Combine_P")
     st.write("Анализ роста амплитуд отступлений от предыдущей проверки к текущей.")
-    if st.button("Открыть программу", key="btn4", use_container_width=True):
+    if st.button("Открыть модуль Dinamika_OTS", key="btn4", use_container_width=True):
         st.switch_page("pages/4_Dinamika_OTS_Combine_P.py")
     st.markdown('</div>', unsafe_allow_html=True)
 
