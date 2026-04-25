@@ -56,10 +56,10 @@ with col3:
 # --- МОДУЛЬ 4 ---
 with col4:
     st.markdown('<div class="module-card">', unsafe_allow_html=True)
-    st.subheader("📅 План ремонта")
-    st.write("Формирование графиков плановых работ на текущий месяц.")
-    if st.button("Открыть Планировщик", key="btn4", use_container_width=True):
-        st.switch_page("pages/4_Plan.py")
+    st.subheader("📅 Dinamika_OTS_Combine_P")
+    st.write("Анализ роста амплитуд отступлений от предыдущей проверки к текущей.")
+    if st.button("Открыть программу", key="btn4", use_container_width=True):
+        st.switch_page("pages/4_Dinamika_OTS_Combine_P.py")
     st.markdown('</div>', unsafe_allow_html=True)
 
 # --- МОДУЛЬ 5 ---
