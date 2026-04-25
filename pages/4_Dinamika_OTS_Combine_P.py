@@ -16,8 +16,10 @@ def normalize_columns(df):
         elif c in ["КОДНАПРВ"]: new_cols[col] = "KOD"
         elif c in ["ПУТЬ"]: new_cols[col] = "PATH"
         elif c in ["АМПЛИТУДА"]: new_cols[col] = "AMP"
+        elif c in ["ДЛИНА"]: new_cols[col] = "LEN"
         elif c in ["СТЕПЕНЬ"]: new_cols[col] = "STEP"
         elif c in ["ОТСТУПЛЕНИЕ"]: new_cols[col] = "OTST"
+        elif c in ["БАЛЛ"]: new_cols[col] = "BALL"
         elif c in ["ГОД"]: new_cols[col] = "YEAR"
         elif c in ["МЕСЯЦ"]: new_cols[col] = "MONTH"
         elif c in ["ДЕНЬ"]: new_cols[col] = "DAY"
@@ -72,13 +74,13 @@ if st.button("🚀 Начать анализ", use_container_width=True):
         for df in [old, new]:
             for col in ["KOD", "PATH", "OTST"]:
                 if col in df.columns: df[col] = df[col].astype(str).str.strip()
-            for col in ["KM", "M", "AMP"]:
+            for col in ["KM", "M", "AMP", "LEN", "BALL"]:
                 if col in df.columns: df[col] = to_numeric(df[col])
 
         old = old.dropna(subset=["KM", "M", "AMP"])
         new = new.dropna(subset=["KM", "M", "AMP"])
 
-        # Merge
+        # Объединение
         merged = pd.merge(old, new, on=["KOD", "PATH", "KM", "OTST"], suffixes=("_old", "_new"))
         merged["delta_m"] = abs(merged["M_new"] - merged["M_old"])
         merged = merged[merged["delta_m"] <= tolerance]
@@ -87,7 +89,7 @@ if st.button("🚀 Начать анализ", use_container_width=True):
             subset=["KOD", "PATH", "KM", "M_old", "OTST"], keep="first"
         )
 
-        # Расчет роста по модулю
+        # Расчет роста (по модулю)
         result = merged[merged["AMP_new"].abs() > merged["AMP_old"].abs()].copy()
         result["Рост"] = (result["AMP_new"].abs() - result["AMP_old"].abs()).round(1)
 
@@ -95,62 +97,91 @@ if st.button("🚀 Начать анализ", use_container_width=True):
             st.warning("Совпадений с ростом амплитуды не найдено.")
             st.stop()
 
-        # Формирование итоговой таблицы
+        # Функция для безопасного получения колонки
+        def get_c(col_name):
+            return result[col_name] if col_name in result.columns else ""
+
+        # Формирование таблицы согласно вашему запросу
         df_display = pd.DataFrame({
-            "КМ": result["KM"],
-            "М": result["M_new"],
-            "Отступление": result["OTST"],
-            "Было (мм)": result["AMP_old"],
-            "Стало (мм)": result["AMP_new"],
-            "Рост (мм)": result["Рост"],
-            "Путь": result["PATH"],
-            "Степень": result["STEP_new"]
+            "Код": get_c("KOD"),
+            "Путь": get_c("PATH"),
+            "КМ": get_c("KM"),
+            "М": get_c("M_new"),
+            "Отступление": get_c("OTST"),
+            "Дата (пред)": result["DATE_old"].dt.strftime('%d.%m.%Y'),
+            "Амп (пред)": get_c("AMP_old"),
+            "Длина (пред)": get_c("LEN_old"),
+            "Балл (пред)": get_c("BALL_old"),
+            "Степень (пред)": get_c("STEP_old"),
+            "Дата (тек)": result["DATE_new"].dt.strftime('%d.%m.%Y'),
+            "Амп (тек)": get_c("AMP_new"),
+            "Длина (тек)": get_c("LEN_new"),
+            "Балл (тек)": get_c("BALL_new"),
+            "Степень (тек)": get_c("STEP_new"),
+            "Рост (мм)": result["Рост"]
         })
 
         # ==============================
-        # НОВЫЙ ВЫВОД (ТАБЛИЦЫ ВМЕСТО ГРАФИКА)
+        # ИНТЕРФЕЙС ВЫВОДА
         # ==============================
         
-        # 1. Блок КРИТИЧЕСКОГО роста (> 10 мм)
         critical = df_display[df_display["Рост (мм)"] >= 10].sort_values("Рост (мм)", ascending=False)
         if not critical.empty:
             st.error("⚠️ ОБРАТИ ВНИМАНИЕ: Критический рост более 10 мм!")
             st.table(critical)
         
-        # 2. Блок ОПАСНОГО роста (> 5 мм)
-        danger = df_display[(df_display["Рост (мм)"] >= 5) & (df_display["Рост (мм)"] < 10)].sort_values("Рост (мм)", ascending=False)
+        danger = df_display[(df_display["Рост (мм)"] >= 5) & (df_display["Рост (мм)"] < 10)]
         st.subheader("❗ Опасный рост (от 5 до 10 мм)")
         if not danger.empty:
-            st.dataframe(danger, use_container_width=True)
+            st.dataframe(danger.sort_values("Рост (мм)", ascending=False), use_container_width=True)
         else:
             st.write("Точек роста от 5 до 10 мм не обнаружено.")
 
-        # 3. Общая таблица (скрыта под спойлер)
         with st.expander("Показать все найденные изменения"):
             st.dataframe(df_display.sort_values("Рост (мм)", ascending=False), use_container_width=True)
 
         # ==============================
-        # ЭКСПОРТ EXCEL
+        # ЭКСПОРТ EXCEL С РАСШИРЕННЫМИ КОЛОНКАМИ
         # ==============================
         def to_excel(df):
-            from openpyxl.styles import PatternFill
+            from openpyxl.styles import PatternFill, Font, Alignment
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine="openpyxl") as writer:
                 df.to_excel(writer, index=False, sheet_name="Рост")
                 ws = writer.book["Рост"]
-                red = PatternFill(start_color="FF9999", fill_type="solid")
+                
+                # Стилизация заголовков и ячеек
+                header_font = Font(bold=True)
+                red_fill = PatternFill(start_color="FF9999", fill_type="solid")
+                
+                # Поиск индекса колонки "Рост (мм)" (она последняя)
+                growth_col_idx = df.columns.get_loc("Рост (мм)") + 1
+                
                 for row in range(2, ws.max_row + 1):
-                    if ws.cell(row=row, column=6).value >= 5:
-                        ws.cell(row=row, column=6).fill = red
+                    val = ws.cell(row=row, column=growth_col_idx).value
+                    if val and val >= 5:
+                        ws.cell(row=row, column=growth_col_idx).fill = red_fill
+                
+                # Автоподбор ширины колонок
+                for col in ws.columns:
+                    max_length = 0
+                    column = col[0].column_letter
+                    for cell in col:
+                        try:
+                            if len(str(cell.value)) > max_length:
+                                max_length = len(str(cell.value))
+                        except: pass
+                    ws.column_dimensions[column].width = max_length + 2
+
             output.seek(0)
             return output
 
         st.download_button(
             label="📥 Скачать полный отчет (Excel)",
             data=to_excel(df_display),
-            file_name="growth_report.xlsx",
+            file_name="growth_analysis_report.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
     except Exception as e:
-        st.error(f"Ошибка при обработке данных: {e}")
+        st.error(f"Ошибка при обработке: {e}")
