@@ -4,102 +4,130 @@ import io
 import plotly.express as px
 from openpyxl.styles import PatternFill
 
-st.set_page_config(page_title="Рост отступлений", layout="wide")
+# Настройка страницы
+st.set_page_config(page_title="Анализ роста отступлений", layout="wide")
 
-# ==============================
-# БЕЗОПАСНАЯ НОРМАЛИЗАЦИЯ
-# ==============================
-def normalize_columns(df):
+# --- 1. ФУНКЦИЯ НОРМАЛИЗАЦИИ (БЕЗОПАСНАЯ) ---
+def normalize_dataframe(df):
     """
-    Исправляет заголовки и типы данных. 
-    Критически важно: .str вызывается только у Series после .astype(str).
+    Приводит заголовки к стандарту и исправляет типы данных.
+    Исправляет ошибку 'DataFrame object has no attribute str'.
     """
-    # 1. Чистим заголовки: убираем пробелы и в верхний регистр
+    # Очистка заголовков (убираем пробелы, в верхний регистр)
     df.columns = [str(col).strip().upper() for col in df.columns]
     
-    # 2. Карта переименования для унификации
+    # Карта переименования (синонимы для разных версий выгрузок)
     rename_map = {
         "КМ": "KM", "KM": "KM",
         "М": "M", "M": "M",
         "КОДНАПРВ": "KOD", "КОД": "KOD", "KOD": "KOD",
         "ПУТЬ": "PATH", "PATH": "PATH",
         "АМПЛИТУДА": "AMP", "AMP": "AMP",
-        "СТЕПЕНЬ": "STEP", "STEP": "STEP",
-        "ОТСТУПЛЕНИЕ": "OTST", "OTST": "OTST"
+        "ОТСТУПЛЕНИЕ": "OTST", "OTST": "OTST",
+        "СТЕПЕНЬ": "STEP"
     }
     df = df.rename(columns=rename_map)
 
-    # 3. БЕЗОПАСНАЯ ОБРАБОТКА СТОЛБЦОВ (Решение вашей ошибки)
-    # Обрабатываем 'KOD', если он есть
+    # Исправляем колонку KOD (Код направления)
+    # Сначала в строку (.astype(str)), потом убираем хвосты .0
     if "KOD" in df.columns:
-        # Сначала в строку, потом замена. Это предотвращает ошибку 'AttributeError'
         df["KOD"] = df["KOD"].astype(str).str.replace(".0", "", regex=False)
-    
-    # Обработка числовых колонок (замена запятой на точку для корректного float)
+    else:
+        df["KOD"] = "0"
+
+    # Исправляем числовые колонки (замена запятой на точку)
     for col in ["KM", "M", "AMP"]:
         if col in df.columns:
-            # Применяем .str только к конкретной колонке
+            # .str вызывается только у конкретной колонки!
             df[col] = pd.to_numeric(df[col].astype(str).str.replace(",", "."), errors="coerce")
             
     return df
 
-# ==============================
-# ИНТЕРФЕЙС И ЛОГИКА
-# ==============================
-st.title("📈 Анализ роста амплитуд (Модуль 4)")
+# --- 2. ОСНОВНОЙ ИНТЕРФЕЙС ---
+st.title("📈 Динамика-О: Мониторинг роста амплитуд")
+st.write("Загрузите результаты двух проходов вагона-дефектоскопа для сравнения.")
 
 col1, col2 = st.columns(2)
+
 with col1:
-    f_old = st.file_uploader("📂 Прошлый проход (Excel)", type=["xlsx"], key="u_old")
+    file_old = st.file_uploader("📂 Прошлый проход (Excel)", type=["xlsx"], key="old_file")
 with col2:
-    f_new = st.file_uploader("📂 Текущий проход (Excel)", type=["xlsx"], key="u_new")
+    file_new = st.file_uploader("📂 Текущий проход (Excel)", type=["xlsx"], key="new_file")
 
-if f_old and f_new:
+if file_old and file_new:
     try:
-        # Читаем данные (по умолчанию первый лист)
-        df_old = normalize_dataframe(pd.read_excel(f_old))
-        df_new = normalize_dataframe(pd.read_excel(f_new))
+        with st.spinner("Синхронизация данных..."):
+            # Загрузка
+            df_old = normalize_dataframe(pd.read_excel(file_old))
+            df_new = normalize_dataframe(pd.read_excel(file_new))
 
-        # Проверка обязательных полей
-        required = {"KM", "M", "AMP", "OTST"}
-        if not required.issubset(df_new.columns):
-            st.error(f"В файле не найдены колонки: {required - set(df_new.columns)}")
-            st.stop()
+            # Проверка на наличие критических колонок
+            required = {"KM", "M", "AMP", "OTST"}
+            if not required.issubset(df_new.columns):
+                st.error(f"В файлах отсутствуют необходимые колонки: {required - set(df_new.columns)}")
+                st.stop()
 
-        # Округление метров для синхронизации (допуск 2 метра)
-        df_old['M_S'] = (df_old['M'] / 2).round() * 2
-        df_new['M_S'] = (df_new['M'] / 2).round() * 2
+            # Синхронизация по метрам (округление до 2м, чтобы поймать одно и то же отступление)
+            df_old['M_SYNC'] = (df_old['M'] / 2).round() * 2
+            df_new['M_SYNC'] = (df_new['M'] / 2).round() * 2
 
-        # Склеиваем данные (Merge)
-        merged = pd.merge(
-            df_new, 
-            df_old[['KOD', 'PATH', 'KM', 'M_S', 'OTST', 'AMP']], 
-            on=['KOD', 'PATH', 'KM', 'M_S', 'OTST'], 
-            how='inner', 
-            suffixes=('', '_OLD')
-        )
+            # Объединение таблиц (Merge)
+            # Ищем совпадения по коду, пути, км, сглаженным метрам и типу отступления
+            merged = pd.merge(
+                df_new, 
+                df_old[['KOD', 'PATH', 'KM', 'M_SYNC', 'OTST', 'AMP']], 
+                on=['KOD', 'PATH', 'KM', 'M_SYNC', 'OTST'], 
+                how='inner', 
+                suffixes=('', '_OLD')
+            )
 
-        # Вычисляем рост
-        merged['РОСТ'] = (merged['AMP'] - merged['AMP_OLD']).round(1)
-        df_result = merged[merged['РОСТ'] > 0].sort_values(by='РОСТ', ascending=False)
-
-        if not df_result.empty:
-            st.subheader("📊 Результаты сравнения")
+            # Расчет разницы (роста)
+            merged['РОСТ'] = (merged['AMP'] - merged['AMP_OLD']).round(1)
             
-            # График
-            fig = px.scatter(df_result, x="KM", y="РОСТ", size="AMP", color="OTST", hover_data=['M'])
-            st.plotly_chart(fig, use_container_width=True)
+            # Фильтруем только те, где амплитуда реально выросла
+            df_result = merged[merged['РОСТ'] > 0].sort_values(by='РОСТ', ascending=False)
 
-            # Таблица
-            st.dataframe(df_result, use_container_width=True)
-            
-            # Экспорт
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine="openpyxl") as writer:
-                df_result.to_excel(writer, index=False, sheet_name="Результат")
-            st.download_button("📥 Скачать Excel", output.getvalue(), "growth_report.xlsx")
-        else:
-            st.success("✅ Роста амплитуд не выявлено.")
+            if not df_result.empty:
+                st.subheader(f"✅ Найдено точек роста: {len(df_result)}")
+                
+                # График распределения роста по километрам
+                fig = px.scatter(
+                    df_result, 
+                    x="KM", 
+                    y="РОСТ", 
+                    size="AMP", 
+                    color="OTST",
+                    title="Карта роста амплитуд",
+                    labels={"KM": "Километр", "РОСТ": "Прирост (мм)", "OTST": "Тип"},
+                    hover_data=['M', 'AMP_OLD', 'AMP']
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+                # Таблица результатов
+                display_cols = ['KOD', 'PATH', 'KM', 'M', 'OTST', 'AMP_OLD', 'AMP', 'РОСТ']
+                st.dataframe(df_result[display_cols], use_container_width=True)
+                
+                # Подготовка Excel для скачивания
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                    df_result[display_cols].to_excel(writer, index=False, sheet_name="Результат")
+                    
+                    # Цветовая индикация в Excel (опционально)
+                    ws = writer.book["Результат"]
+                    red_fill = PatternFill(start_color="FF9999", fill_type="solid")
+                    for row in range(2, ws.max_row + 1):
+                        # Если рост больше 5мм — подсвечиваем красным
+                        if ws.cell(row=row, column=8).value > 5:
+                            ws.cell(row=row, column=8).fill = red_fill
+
+                st.download_button(
+                    label="📥 Скачать отчет в Excel",
+                    data=output.getvalue(),
+                    file_name="Otchet_Rosta_OTS.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+            else:
+                st.success("Совпадающих отступлений с ростом амплитуды не обнаружено.")
 
     except Exception as e:
-        st.error(f"Ошибка при обработке: {e}")
+        st.error(f"Критическая ошибка: {e}")
