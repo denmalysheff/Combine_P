@@ -2,45 +2,39 @@ import streamlit as st
 import pandas as pd
 import io
 import requests
-import urllib.parse
-import plotly.express as px
 
 # --- КОНФИГУРАЦИЯ ---
-URL_STRUCT = "https://raw.githubusercontent.com/denmalysheff/Nuch/refs/heads/main/adm_struktur.xlsx"
+URL_STRUCT = "https://raw.githubusercontent.com/denmalysheff/Nuch/main/adm_struktur.xlsx"
 
-st.set_page_config(page_title="Аналитика ПЧ-22", layout="wide")
+st.set_page_config(page_title="Расчет Nуч — Аналитика ПЧ-22", layout="wide")
 
 @st.cache_data
 def load_admin_structure(url):
     try:
-        # Корректировка ссылки GitHub Raw
-        url = url.replace("Nuch/raw/refs", "Nuch/refs")
-        parsed_url = list(urllib.parse.urlparse(url))
-        parsed_url[2] = urllib.parse.quote(parsed_url[2])
-        encoded_url = urllib.parse.urlunparse(parsed_url)
-        
-        response = requests.get(encoded_url, timeout=15)
+        response = requests.get(url, timeout=15)
         response.raise_for_status() 
-        
         df = pd.read_excel(io.BytesIO(response.content), engine='openpyxl')
-        df.columns = [col.strip().upper() for col in df.columns]
+        df.columns = [str(col).strip().upper() for col in df.columns]
         
         if 'КМКОН' in df.columns and 'КМНАЧ' in df.columns:
-            df['ПЛАН_ДЛИНА'] = abs(df['КМКОН'] - df['КМНАЧ'])
+            df['ПЛАН_ДЛИНА'] = (df['КМКОН'] - df['КМНАЧ']).abs()
         return df
     except Exception as e:
-        st.error(f"❌ Ошибка справочника GitHub: {e}")
+        st.error(f"❌ Ошибка загрузки справочника: {e}")
         return None
 
 def calculate_metrics(group_name, group_data, level, plan_km=0):
-    """Единая функция расчета Nуч и полноты"""
-    fact_km = group_data["ПРОВЕРЕНО"].sum()
+    # Принудительно переводим в числа для корректного расчета
+    checked = pd.to_numeric(group_data["ПРОВЕРЕНО"], errors='coerce').fillna(0)
+    scores = pd.to_numeric(group_data["ОЦЕНКА"], errors='coerce').fillna(0)
+    
+    fact_km = checked.sum()
     
     # Распределение по оценкам
-    km_5 = group_data[group_data["ОЦЕНКА"] == 5]["ПРОВЕРЕНО"].sum()
-    km_4 = group_data[group_data["ОЦЕНКА"] == 4]["ПРОВЕРЕНО"].sum()
-    km_3 = group_data[group_data["ОЦЕНКА"] == 3]["ПРОВЕРЕНО"].sum()
-    km_2 = group_data[group_data["ОЦЕНКА"] == 2]["ПРОВЕРЕНО"].sum()
+    km_5 = checked[scores == 5].sum()
+    km_4 = checked[scores == 4].sum()
+    km_3 = checked[scores == 3].sum()
+    km_2 = checked[scores == 2].sum()
 
     n_uch = 0
     if fact_km > 0:
@@ -60,7 +54,7 @@ def calculate_metrics(group_name, group_data, level, plan_km=0):
     }
 
 # --- ИНТЕРФЕЙС ---
-st.title("📊 Балловая оценка состояния пути")
+st.title("📊 Расчет балловой оценки (Nуч)")
 st.markdown("---")
 
 df_struct = load_admin_structure(URL_STRUCT)
@@ -71,24 +65,23 @@ if df_struct is not None:
     
     if uploaded_file:
         try:
-            # 1. Загрузка и фильтрация
             df_raw = pd.read_excel(uploaded_file, sheet_name="Оценка КМ")
-            df_raw.columns = [col.strip().upper() for col in df_raw.columns]
+            df_raw.columns = [str(col).strip().upper() for col in df_raw.columns]
             
-            # Фильтр направлений (как в старой программе)
+            # Фильтр направлений (основные ходы)
             main_codes = ['24701', '24602', '24603']
             df_eval = df_raw[df_raw["КОДНАПР"].astype(str).isin(main_codes)].copy()
 
-            # 2. План из справочника
+            # План из справочника
             pd_plan_map = df_struct.groupby('ПД')['ПЛАН_ДЛИНА'].sum().to_dict()
 
-            # 3. Расчет Линейных (ПД)
             final_stats = []
+            # Расчет по Линейным участкам (ПД)
             for pd_id, group in df_eval.groupby("ПД"):
                 p_km = pd_plan_map.get(pd_id, 0)
                 final_stats.append(calculate_metrics(f"ПД-{pd_id}", group, "Линейный", p_km))
 
-            # 4. Расчет Групповых (ПЧЗ / ПЧУ)
+            # Расчет по Групповым (ПЧЗ / ПЧУ)
             groups_config = {
                 "ПЧЗ Юг": [1, 2, 3, 4, 5, 12],
                 "ПЧЗ Запад": [6, 7, 8, 9, 10, 11, 13, 14, 15],
@@ -98,41 +91,28 @@ if df_struct is not None:
             for g_name, pds in groups_config.items():
                 g_data = df_eval[df_eval["ПД"].isin(pds)]
                 g_plan = sum([pd_plan_map.get(p, 0) for p in pds])
-                final_stats.append(calculate_metrics(g_name, g_data, "Групповой", g_plan))
+                if not g_data.empty:
+                    final_stats.append(calculate_metrics(g_name, g_data, "Групповой", g_plan))
 
             results_df = pd.DataFrame(final_stats)
 
-            # --- МЕТРИКИ ---
-            total_fact = df_eval["ПРОВЕРЕНО"].sum()
-            total_plan = sum(pd_plan_map.values())
-            
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                avg_n = results_df[results_df["Уровень"]=="Групповой"]["Nуч"].mean()
-                st.metric("Средний Nуч по ПЧ", round(avg_n, 2))
-            with c2:
-                st.metric("Полнота проверки", f"{round(total_fact/total_plan*100, 1)}%")
-            with c3:
-                st.metric("Неуд (км)", round(df_eval[df_eval['ОЦЕНКА']==2]['ПРОВЕРЕНО'].sum(), 2))
-
-            # --- ВИЗУАЛИЗАЦИЯ ---
-            tab1, tab2, tab3 = st.tabs(["📋 Итоги", "📈 Графики", "🔍 Целостность пути"])
+            # --- ВЫВОД ---
+            tab1, tab2 = st.tabs(["📋 Итоги расчета", "🔍 Детальная проверка"])
 
             with tab1:
-                st.dataframe(
-                    results_df.style.background_gradient(subset=['Nуч'], cmap='RdYlGn', vmin=3, vmax=5)
-                    .background_gradient(subset=['Полнота %'], cmap='YlOrRd', vmin=80, vmax=100),
-                    use_container_width=True
-                )
+                try:
+                    # Попытка стилизации (требует matplotlib)
+                    st.dataframe(
+                        results_df.style.background_gradient(subset=['Nуч'], cmap='RdYlGn', vmin=3, vmax=5)
+                        .background_gradient(subset=['Полнота %'], cmap='YlOrRd', vmin=80, vmax=100),
+                        use_container_width=True
+                    )
+                except Exception:
+                    # Если matplotlib еще не установился, выводим без цвета
+                    st.dataframe(results_df, use_container_width=True)
 
             with tab2:
-                fig = px.bar(results_df[results_df["Уровень"]=="Линейный"], 
-                             x="Группа", y="Nуч", color="Полнота %", 
-                             title="Качество по ПД (Цвет = Полнота)", text_auto=True)
-                st.plotly_chart(fig, use_container_width=True)
-
-            with tab3:
-                st.subheader("Сверка по Пути и Направлению")
+                st.subheader("Сверка фактического прохода с планом")
                 path_fact = df_eval.groupby(['КОДНАПР', 'ПУТЬ', 'ПД'])['ПРОВЕРЕНО'].sum().reset_index()
                 path_plan = df_struct.groupby(['НАПРАВЛЕНИЕ', 'ПУТЬ', 'ПД'])['ПЛАН_ДЛИНА'].sum().reset_index()
                 
@@ -140,32 +120,10 @@ if df_struct is not None:
                     path_fact, left_on=['НАПРАВЛЕНИЕ','ПУТЬ','ПД'], 
                     right_on=['КОДНАПР','ПУТЬ','ПД'], how='left'
                 ).fillna(0)
-                detail_check['ДЕФИЦИТ (КМ)'] = (detail_check['ПЛАН_ДЛИНА'] - detail_check['ПРОВЕРЕНО']).round(3)
-                st.dataframe(detail_check.drop(columns=['КОДНАПР']), use_container_width=True)
-
-            # --- ЭКСПОРТ EXCEL ---
-            st.sidebar.markdown("---")
-            st.sidebar.header("📥 Скачать отчет")
-            
-            buffer = io.BytesIO()
-            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                results_df.to_excel(writer, sheet_name='ИТОГИ_ОБЩИЕ', index=False)
-                detail_check.to_excel(writer, sheet_name='ПОЛНОТА_ДЕТАЛЬНО', index=False)
-                # Разделение по категориям
-                for score, name in {5: "Отличные", 4: "Хорошие", 3: "Удовл", 2: "Неуд"}.items():
-                    subset = df_eval[df_eval["ОЦЕНКА"] == score]
-                    subset.to_excel(writer, sheet_name=name, index=False)
-
-            st.sidebar.download_button(
-                label="Скачать Excel (.xlsx)",
-                data=buffer.getvalue(),
-                file_name="Analiz_PCH22_Full.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+                detail_check['ДЕФИЦИТ'] = (detail_check['ПЛАН_ДЛИНА'] - detail_check['ПРОВЕРЕНО']).round(3)
+                st.dataframe(detail_check, use_container_width=True)
 
         except Exception as e:
-            st.error(f"Ошибка в коде: {e}")
-            st.exception(e)
+            st.error(f"❌ Ошибка обработки данных: {e}")
 else:
-    st.info("Ожидание подключения справочника...")
-
+    st.info("Ожидание подключения справочника структур...")
