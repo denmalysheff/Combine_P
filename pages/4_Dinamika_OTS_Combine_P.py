@@ -31,7 +31,7 @@ def normalize_dataframe(df):
     # --- ИСПРАВЛЕНИЕ ОШИБКИ 'DataFrame object has no attribute str' ---
     # Обрабатываем колонку "КОД" только если она есть
     if "КОД" in df.columns:
-        # Превращаем в строку сначала СЕРИЮ (колонку), а не весь DataFrame
+        # Важно: вызываем .astype(str).str у КОЛОНКИ, а не у df
         df["КОД"] = df["КОД"].astype(str).str.replace(".0", "", regex=False)
     else:
         df["КОД"] = "0"
@@ -39,7 +39,7 @@ def normalize_dataframe(df):
     if "ПУТЬ" not in df.columns:
         df["ПУТЬ"] = 1
 
-    # Безопасное приведение чисел
+    # Безопасное приведение чисел для колонок КМ, М, АМП
     for col in ["КМ", "М", "АМП"]:
         if col in df.columns:
             # Сначала в строку, потом замена запятой, потом в число
@@ -53,9 +53,9 @@ st.write("Сравнение амплитуд отступлений между 
 
 col_f1, col_f2 = st.columns(2)
 with col_f1:
-    file1 = st.file_uploader("📂 Прошлый проход (Excel)", type=["xlsx"], key="old_file")
+    file1 = st.file_uploader("📂 Прошлый проход (Excel)", type=["xlsx"], key="old_file_ots")
 with col_f2:
-    file2 = st.file_uploader("📂 Текущий проход (Excel)", type=["xlsx"], key="new_file")
+    file2 = st.file_uploader("📂 Текущий проход (Excel)", type=["xlsx"], key="new_file_ots")
 
 if file1 and file2:
     with st.spinner("Загрузка и обработка..."):
