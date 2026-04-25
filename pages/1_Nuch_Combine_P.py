@@ -2,11 +2,12 @@ import streamlit as st
 import pandas as pd
 import io
 import requests
+from datetime import datetime
 
 # --- КОНФИГУРАЦИЯ ---
 URL_STRUCT = "https://raw.githubusercontent.com/denmalysheff/Nuch/main/adm_struktur.xlsx"
 
-st.set_page_config(page_title="Расчет Nуч", layout="wide")
+st.set_page_config(page_title="Аналитика Nуч", layout="wide")
 
 @st.cache_data
 def load_admin_structure(url):
@@ -19,7 +20,7 @@ def load_admin_structure(url):
             df['ПЛАН_ДЛИНА'] = (df['КМКОН'] - df['КМНАЧ']).abs()
         return df
     except Exception as e:
-        st.error(f"Ошибка справочника: {e}")
+        st.error(f"Ошибка справочника структур: {e}")
         return None
 
 def calculate_metrics(group_name, group_data, level, plan_km=0):
@@ -32,9 +33,7 @@ def calculate_metrics(group_name, group_data, level, plan_km=0):
     km_3 = checked[scores == 3].sum()
     km_2 = checked[scores == 2].sum()
 
-    n_uch = 0
-    if fact_km > 0:
-        n_uch = (km_5*5 + km_4*4 + km_3*3 - km_2*5) / fact_km
+    n_uch = (km_5*5 + km_4*4 + km_3*3 - km_2*5) / fact_km if fact_km > 0 else 0
 
     return {
         "Уровень": level,
@@ -43,36 +42,31 @@ def calculate_metrics(group_name, group_data, level, plan_km=0):
         "Проверено (км)": round(fact_km, 3),
         "План (км)": round(plan_km, 3),
         "Полнота %": round((fact_km / plan_km * 100), 1) if plan_km > 0 else 0,
-        "Отл": round(km_5, 3),
-        "Хор": round(km_4, 3),
-        "Удов": round(km_3, 3),
-        "Неуд": round(km_2, 3)
+        "Отл": round(km_5, 3), "Хор": round(km_4, 3), "Удов": round(km_3, 3), "Неуд": round(km_2, 3)
     }
 
 def style_results(df):
-    """Кастомная стилизация для разделения уровней управления"""
     def apply_row_style(row):
-        style = [''] * len(row)
         if row['Уровень'] == 'Дистанция':
-            return ['background-color: #1f4e78; color: white; font-weight: bold; font-size: 16px'] * len(row)
+            return ['background-color: #1f4e78; color: white; font-weight: bold; font-size: 15px'] * len(row)
         elif row['Уровень'] == 'Зам. ПЧ':
             return ['background-color: #2e75b6; color: white; font-weight: bold'] * len(row)
         elif row['Уровень'] == 'ПЧУ':
             return ['background-color: #deeaf6; color: black; font-weight: bold'] * len(row)
-        return style
+        return [''] * len(row)
 
     return df.style.apply(apply_row_style, axis=1)\
         .background_gradient(subset=['Nуч'], cmap='RdYlGn', vmin=3, vmax=5)\
         .background_gradient(subset=['Полнота %'], cmap='YlOrRd', vmin=80, vmax=100)
 
 # --- ИНТЕРФЕЙС ---
-st.title("📊 Аналитика балловой оценки (Nуч)")
+st.title("📊 Модуль 1: Расчет балловой оценки (Nуч)")
 
 df_struct = load_admin_structure(URL_STRUCT)
 
-# Загрузка файла на главном экране
-st.info("📌 Загрузите файл 'Оценка КМ' для начала анализа")
-uploaded_file = st.file_uploader("Выбор файла Excel", type=["xlsx"], label_visibility="collapsed")
+# Загрузка файла в центре экрана
+st.markdown("### 📥 Шаг 1: Загрузка первичных данных")
+uploaded_file = st.file_uploader("Загрузите Excel-файл (лист 'Оценка КМ')", type=["xlsx"])
 
 if uploaded_file and df_struct is not None:
     try:
@@ -85,56 +79,60 @@ if uploaded_file and df_struct is not None:
         
         final_stats = []
 
-        # 1. Линейный (ПД)
+        # 1. ПД (Линейные)
         for pd_id in sorted(df_eval["ПД"].unique()):
             group = df_eval[df_eval["ПД"] == pd_id]
-            p_km = pd_plan_map.get(pd_id, 0)
-            final_stats.append(calculate_metrics(f"ПД-{pd_id}", group, "Линейный", p_km))
+            final_stats.append(calculate_metrics(f"ПД-{pd_id}", group, "Линейный", pd_plan_map.get(pd_id, 0)))
 
-        # 2. Групповой (ПЧУ)
-        pchu_config = {
-            "ПЧУ-1": [1, 2, 3], "ПЧУ-2": [4, 5, 12], "ПЧУ-3": [7, 8, 13],
-            "ПЧУ-4": [9, 10, 11], "ПЧУ-5": [6, 14, 15]
-        }
-        for name, pds in pchu_config.items():
+        # 2. ПЧУ
+        pchu_cfg = {"ПЧУ-1": [1,2,3], "ПЧУ-2": [4,5,12], "ПЧУ-3": [7,8,13], "ПЧУ-4": [9,10,11], "ПЧУ-5": [6,14,15]}
+        for name, pds in pchu_cfg.items():
             g_data = df_eval[df_eval["ПД"].isin(pds)]
             g_plan = sum([pd_plan_map.get(p, 0) for p in pds])
             final_stats.append(calculate_metrics(name, g_data, "ПЧУ", g_plan))
 
-        # 3. Руководство (ПЧЗ / ПЧ)
-        adm_config = {
-            "ПЧЗ Юг": [1, 2, 3, 4, 5, 12],
-            "ПЧЗ Запад": [6, 7, 8, 9, 10, 11, 13, 14, 15],
-            "ПЧ (Дистанция)": list(range(1, 16))
-        }
-        for name, pds in adm_config.items():
+        # 3. Руководство
+        adm_cfg = {"ПЧЗ Юг": [1,2,3,4,5,12], "ПЧЗ Запад": [6,7,8,9,10,11,13,14,15], "ПЧ (Дистанция)": list(range(1,16))}
+        for name, pds in adm_cfg.items():
             g_data = df_eval[df_eval["ПД"].isin(pds)]
             g_plan = sum([pd_plan_map.get(p, 0) for p in pds])
-            lvl = "Дистанция" if "ПЧ (" in name else "Зам. ПЧ"
-            final_stats.append(calculate_metrics(name, g_data, lvl, g_plan))
+            final_stats.append(calculate_metrics(name, g_data, "Дистанция" if "ПЧ (" in name else "Зам. ПЧ", g_plan))
 
         results_df = pd.DataFrame(final_stats)
 
-        # --- ВКЛАДКИ С РЕЗУЛЬТАТАМИ ---
-        tabs = st.tabs(["📊 Итоги Nуч", "✅ Отличные", "⭐ Хорошие", "⚠️ Удовл.", "🚨 Неуд (Причины)"])
+        # --- КНОПКА СКАЧИВАНИЯ ---
+        st.markdown("### 📝 Шаг 2: Анализ и экспорт")
+        
+        current_date = datetime.now().strftime("%d_%m_%Y")
+        file_name = f"Nuch_Report_{current_date}.xlsx"
+        
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+            results_df.to_excel(writer, sheet_name='Итоги_Nуч', index=False)
+            for score, s_name in {5: "Отличные", 4: "Хорошие", 3: "Удовл", 2: "Неуд"}.items():
+                subset = df_eval[df_eval["ОЦЕНКА"] == score]
+                subset.to_excel(writer, sheet_name=s_name, index=False)
+        
+        st.download_button(
+            label="💾 Скачать итоговый отчет Excel",
+            data=buffer.getvalue(),
+            file_name=file_name,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+        # --- ВКЛАДКИ ---
+        tabs = st.tabs(["📊 Итоги Nуч", "✅ Отличные", "⭐ Хорошие", "⚠️ Удовл.", "🚨 Неуд"])
         
         with tabs[0]:
-            st.dataframe(style_results(results_df), use_container_width=True, height=600)
+            st.dataframe(style_results(results_df), use_container_width=True, height=550)
 
-        # Функционал для фильтрации по оценкам
         for i, score in enumerate([5, 4, 3, 2]):
             with tabs[i+1]:
-                subset = df_eval[df_eval["ОЦЕНКА"] == score].copy()
-                if subset.empty:
-                    st.write(f"Километры с оценкой {score} не найдены.")
+                subset = df_eval[df_eval["ОЦЕНКА"] == score]
+                if not subset.empty:
+                    st.dataframe(subset, use_container_width=True)
                 else:
-                    if score == 2:
-                        st.warning("⚠️ Требуется немедленное устранение причин неудовлетворительной оценки!")
-                        # Здесь можно добавить логику вывода причин, если в файле есть колонки с типами отступлений
-                        cols_to_show = ["ПД", "КМ", "ПК", "ПУТЬ", "ПРОВЕРЕНО", "БАЛЛ"]
-                        st.dataframe(subset[[c for c in cols_to_show if c in subset.columns]], use_container_width=True)
-                    else:
-                        st.dataframe(subset, use_container_width=True)
+                    st.info(f"Километров с оценкой {score} не обнаружено.")
 
     except Exception as e:
-        st.error(f"Ошибка при обработке: {e}")
+        st.error(f"Ошибка обработки: {e}")
