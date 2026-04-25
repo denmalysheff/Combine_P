@@ -21,6 +21,9 @@ def normalize_columns(df):
         elif c in ["СТЕПЕНЬ"]: new_cols[col] = "STEP"
         elif c in ["ОТСТУПЛЕНИЕ"]: new_cols[col] = "OTST"
         elif c in ["БАЛЛ"]: new_cols[col] = "BALL"
+        elif c in ["ИС"]: new_cols[col] = "IS"
+        elif c in ["СТРЕЛКА", "СТР"]: new_cols[col] = "STR"
+        elif c in ["МОСТ"]: new_cols[col] = "MOST"
         elif c in ["ГОД"]: new_cols[col] = "YEAR"
         elif c in ["МЕСЯЦ"]: new_cols[col] = "MONTH"
         elif c in ["ДЕНЬ"]: new_cols[col] = "DAY"
@@ -37,7 +40,7 @@ def make_date(df):
     )
 
 # ==============================
-# UI ИНТЕРФЕЙС
+# UI
 # ==============================
 st.title("📊 Мониторинг роста амплитуд")
 
@@ -47,15 +50,11 @@ with c1:
 with c2:
     file2 = st.file_uploader("Файл текущей проверки", type=["xlsx"])
 
-tolerance = st.number_input("Допуск по метрам для поиска совпадений", value=3)
+tolerance = st.number_input("Допуск (м) для поиска совпадений", value=3)
 
-# ==============================
-# ЛОГИКА ОБРАБОТКИ
-# ==============================
 if st.button("🚀 Начать анализ", use_container_width=True):
-
     if not file1 or not file2:
-        st.error("Загрузите оба файла для сравнения")
+        st.error("Загрузите оба файла")
         st.stop()
 
     try:
@@ -65,23 +64,20 @@ if st.button("🚀 Начать анализ", use_container_width=True):
         df1["DATE"] = make_date(df1)
         df2["DATE"] = make_date(df2)
 
-        # Авто-определение хронологии (что старое, что новое)
         if df1["DATE"].min() < df2["DATE"].min():
             old, new = df1, df2
         else:
             old, new = df2, df1
 
-        # Очистка данных
         for df in [old, new]:
-            for col in ["KOD", "PATH", "OTST"]:
-                if col in df.columns: df[col] = df[col].astype(str).str.strip()
+            for col in ["KOD", "PATH", "OTST", "IS", "STR", "MOST"]:
+                if col in df.columns: df[col] = df[col].astype(str).replace("nan", "").str.strip()
             for col in ["KM", "M", "AMP", "LEN", "BALL"]:
                 if col in df.columns: df[col] = to_numeric(df[col])
 
         old = old.dropna(subset=["KM", "M", "AMP"])
         new = new.dropna(subset=["KM", "M", "AMP"])
 
-        # Сопоставление (Merge)
         merged = pd.merge(old, new, on=["KOD", "PATH", "KM", "OTST"], suffixes=("_old", "_new"))
         merged["delta_m"] = abs(merged["M_new"] - merged["M_old"])
         merged = merged[merged["delta_m"] <= tolerance]
@@ -90,102 +86,69 @@ if st.button("🚀 Начать анализ", use_container_width=True):
             subset=["KOD", "PATH", "KM", "M_old", "OTST"], keep="first"
         )
 
-        # Фильтрация только тех, где амплитуда выросла (по модулю)
+        # Расчет роста по абсолютному значению
         result = merged[merged["AMP_new"].abs() > merged["AMP_old"].abs()].copy()
         result["Рост"] = (result["AMP_new"].abs() - result["AMP_old"].abs()).round(1)
 
-        if result.empty:
-            st.warning("Совпадений с ростом амплитуды не найдено.")
-            st.stop()
-
-        # Формирование итоговой таблицы с сортировкой ОТ МАКС К МИН
         def get_c(col_name):
             return result[col_name] if col_name in result.columns else ""
 
+        # Формирование итоговой таблицы с сортировкой ПО УБЫВАНИЮ РОСТА
         df_display = pd.DataFrame({
-            "Код": get_c("KOD"),
-            "Путь": get_c("PATH"),
             "КМ": get_c("KM"),
             "М": get_c("M_new"),
             "Отступление": get_c("OTST"),
+            "Рост (мм)": result["Рост"],
             "Дата (пред)": result["DATE_old"].dt.strftime('%d.%m.%Y'),
             "Амп (пред)": get_c("AMP_old"),
-            "Длина (пред)": get_c("LEN_old"),
-            "Балл (пред)": get_c("BALL_old"),
             "Степень (пред)": get_c("STEP_old"),
             "Дата (тек)": result["DATE_new"].dt.strftime('%d.%m.%Y'),
             "Амп (тек)": get_c("AMP_new"),
-            "Длина (тек)": get_c("LEN_new"),
-            "Балл (тек)": get_c("BALL_new"),
             "Степень (тек)": get_c("STEP_new"),
-            "Рост (мм)": result["Рост"]
-        }).sort_values("Рост (мм)", ascending=False) # Сортировка здесь
+            "ИС": get_c("IS_old"),
+            "СТР": get_c("STR_old"),
+            "МОСТ": get_c("MOST_old"),
+            "Путь": get_c("PATH"),
+            "Код": get_c("KOD")
+        }).sort_values("Рост (мм)", ascending=False)
 
-        # ==============================
-        # ВЫВОД РЕЗУЛЬТАТОВ В ТАБЛИЦЫ
-        # ==============================
-        
-        # Блок критического роста
+        # Вывод
         critical = df_display[df_display["Рост (мм)"] >= 10]
         if not critical.empty:
             st.error("⚠️ ОБРАТИ ВНИМАНИЕ: Критический рост более 10 мм!")
             st.table(critical)
         
-        # Блок опасного роста
         danger = df_display[(df_display["Рост (мм)"] >= 5) & (df_display["Рост (мм)"] < 10)]
         st.subheader("❗ Опасный рост (от 5 до 10 мм)")
-        if not danger.empty:
-            st.dataframe(danger, use_container_width=True)
-        else:
-            st.info("Точек роста от 5 до 10 мм не обнаружено.")
+        st.dataframe(danger, use_container_width=True)
 
-        with st.expander("Показать полный список изменений"):
+        with st.expander("Весь список изменений"):
             st.dataframe(df_display, use_container_width=True)
 
-        # ==============================
-        # ЭКСПОРТ В EXCEL
-        # ==============================
+        # Экспорт
         def to_excel(df):
-            from openpyxl.styles import PatternFill, Font
+            from openpyxl.styles import PatternFill
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine="openpyxl") as writer:
-                df.to_excel(writer, index=False, sheet_name="АнализРоста")
-                ws = writer.book["АнализРоста"]
-                
+                df.to_excel(writer, index=False, sheet_name="Анализ")
+                ws = writer.book["Анализ"]
                 red_fill = PatternFill(start_color="FF9999", fill_type="solid")
-                header_font = Font(bold=True)
                 
-                # Подсветка роста >= 5 мм
-                growth_col_idx = df.columns.get_loc("Рост (мм)") + 1
+                # Поиск индекса колонки Рост
+                col_idx = df.columns.get_loc("Рост (мм)") + 1
                 for row in range(2, ws.max_row + 1):
-                    val = ws.cell(row=row, column=growth_col_idx).value
+                    val = ws.cell(row=row, column=col_idx).value
                     if val and val >= 5:
-                        ws.cell(row=row, column=growth_col_idx).fill = red_fill
+                        ws.cell(row=row, column=col_idx).fill = red_fill
                 
-                # Настройка ширины колонок
                 for col in ws.columns:
-                    max_length = 0
-                    column = col[0].column_letter
-                    for cell in col:
-                        try:
-                            if len(str(cell.value)) > max_length:
-                                max_length = len(str(cell.value))
-                        except: pass
-                    ws.column_dimensions[column].width = max_length + 2
-
+                    max_length = max(len(str(cell.value)) for cell in col)
+                    ws.column_dimensions[col[0].column_letter].width = max_length + 2
             output.seek(0)
             return output
 
-        # Имя файла: НазваниеМодуля_Дата.xlsx
-        current_date_str = datetime.now().strftime("%d.%m.%Y")
-        file_name_ready = f"Мониторинг_роста_амплитуд_{current_date_str}.xlsx"
-
-        st.download_button(
-            label="📥 Скачать отчет (Excel)",
-            data=to_excel(df_display),
-            file_name=file_name_ready,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+        filename = f"Мониторинг_роста_амплитуд_{datetime.now().strftime('%d.%m.%Y')}.xlsx"
+        st.download_button("📥 Скачать Excel", data=to_excel(df_display), file_name=filename)
 
     except Exception as e:
-        st.error(f"Произошла ошибка: {str(e)}")
+        st.error(f"Ошибка: {e}")
