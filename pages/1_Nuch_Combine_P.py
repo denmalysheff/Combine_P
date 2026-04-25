@@ -51,7 +51,7 @@ def style_results(df):
             return ['background-color: #1f4e78; color: white; font-weight: bold; font-size: 15px'] * len(row)
         elif row['Уровень'] == 'Зам. ПЧ':
             return ['background-color: #2e75b6; color: white; font-weight: bold'] * len(row)
-        elif row['Уровень'] == 'ПЧУ':
+        elif row['Уровень'] == 'Эксплуатационный':
             return ['background-color: #deeaf6; color: black; font-weight: bold'] * len(row)
         return [''] * len(row)
 
@@ -64,7 +64,6 @@ st.title("📊 Модуль 1: Расчет балловой оценки (Nуч
 
 df_struct = load_admin_structure(URL_STRUCT)
 
-# Загрузка файла в центре экрана
 st.markdown("### 📥 Шаг 1: Загрузка первичных данных")
 uploaded_file = st.file_uploader("Загрузите Excel-файл (лист 'Оценка КМ')", type=["xlsx"])
 
@@ -73,34 +72,36 @@ if uploaded_file and df_struct is not None:
         df_raw = pd.read_excel(uploaded_file, sheet_name="Оценка КМ")
         df_raw.columns = [str(col).strip().upper() for col in df_raw.columns]
         
+        # Фильтрация и подготовка данных
         main_codes = ['24701', '24602', '24603']
         df_eval = df_raw[df_raw["КОДНАПР"].astype(str).isin(main_codes)].copy()
         pd_plan_map = df_struct.groupby('ПД')['ПЛАН_ДЛИНА'].sum().to_dict()
         
         final_stats = []
 
-        # 1. ПД (Линейные)
+        # 1. ПД (Линейный уровень)
         for pd_id in sorted(df_eval["ПД"].unique()):
             group = df_eval[df_eval["ПД"] == pd_id]
             final_stats.append(calculate_metrics(f"ПД-{pd_id}", group, "Линейный", pd_plan_map.get(pd_id, 0)))
 
-        # 2. ПЧУ
+        # 2. ПЧУ (Эксплуатационный уровень)
         pchu_cfg = {"ПЧУ-1": [1,2,3], "ПЧУ-2": [4,5,12], "ПЧУ-3": [7,8,13], "ПЧУ-4": [9,10,11], "ПЧУ-5": [6,14,15]}
         for name, pds in pchu_cfg.items():
             g_data = df_eval[df_eval["ПД"].isin(pds)]
             g_plan = sum([pd_plan_map.get(p, 0) for p in pds])
-            final_stats.append(calculate_metrics(name, g_data, "ПЧУ", g_plan))
+            final_stats.append(calculate_metrics(name, g_data, "Эксплуатационный", g_plan))
 
         # 3. Руководство
         adm_cfg = {"ПЧЗ Юг": [1,2,3,4,5,12], "ПЧЗ Запад": [6,7,8,9,10,11,13,14,15], "ПЧ (Дистанция)": list(range(1,16))}
         for name, pds in adm_cfg.items():
             g_data = df_eval[df_eval["ПД"].isin(pds)]
             g_plan = sum([pd_plan_map.get(p, 0) for p in pds])
-            final_stats.append(calculate_metrics(name, g_data, "Дистанция" if "ПЧ (" in name else "Зам. ПЧ", g_plan))
+            lvl = "Дистанция" if "ПЧ (" in name else "Зам. ПЧ"
+            final_stats.append(calculate_metrics(name, g_data, lvl, g_plan))
 
         results_df = pd.DataFrame(final_stats)
 
-        # --- КНОПКА СКАЧИВАНИЯ ---
+        # --- ПОДГОТОВКА EXCEL С ВЫРАВНИВАНИЕМ ---
         st.markdown("### 📝 Шаг 2: Анализ и экспорт")
         
         current_date = datetime.now().strftime("%d_%m_%Y")
@@ -109,10 +110,25 @@ if uploaded_file and df_struct is not None:
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
             results_df.to_excel(writer, sheet_name='Итоги_Nуч', index=False)
+            
+            # Колонки для вкладок КМ
+            target_cols = ["КОДНАПР", "ПУТЬ", "ПД", "КМ", "ОЦЕНКА", "ПРИЧИНА"]
+            
             for score, s_name in {5: "Отличные", 4: "Хорошие", 3: "Удовл", 2: "Неуд"}.items():
                 subset = df_eval[df_eval["ОЦЕНКА"] == score]
-                subset.to_excel(writer, sheet_name=s_name, index=False)
-        
+                # Оставляем только существующие из списка целевых колонок
+                available_cols = [c for c in target_cols if c in subset.columns]
+                subset_to_save = subset[available_cols]
+                subset_to_save.to_excel(writer, sheet_name=s_name, index=False)
+            
+            # Форматирование (Выравнивание по центру)
+            from openpyxl.styles import Alignment
+            for sheetname in writer.sheets:
+                ws = writer.sheets[sheetname]
+                for row in ws.iter_rows():
+                    for cell in row:
+                        cell.alignment = Alignment(horizontal='center', vertical='center')
+
         st.download_button(
             label="💾 Скачать итоговый отчет Excel",
             data=buffer.getvalue(),
@@ -120,7 +136,7 @@ if uploaded_file and df_struct is not None:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
-        # --- ВКЛАДКИ ---
+        # --- ТАБЛИЦЫ В ИНТЕРФЕЙСЕ ---
         tabs = st.tabs(["📊 Итоги Nуч", "✅ Отличные", "⭐ Хорошие", "⚠️ Удовл.", "🚨 Неуд"])
         
         with tabs[0]:
@@ -129,8 +145,9 @@ if uploaded_file and df_struct is not None:
         for i, score in enumerate([5, 4, 3, 2]):
             with tabs[i+1]:
                 subset = df_eval[df_eval["ОЦЕНКА"] == score]
+                available_cols = [c for c in target_cols if c in subset.columns]
                 if not subset.empty:
-                    st.dataframe(subset, use_container_width=True)
+                    st.dataframe(subset[available_cols], use_container_width=True)
                 else:
                     st.info(f"Километров с оценкой {score} не обнаружено.")
 
