@@ -49,73 +49,92 @@ def calculate_metrics(group_name, group_data, level, plan_km=0):
         "Неуд": round(km_2, 3)
     }
 
-st.title("📊 Расчет балловой оценки (Nуч)")
+def style_results(df):
+    """Кастомная стилизация для разделения уровней управления"""
+    def apply_row_style(row):
+        style = [''] * len(row)
+        if row['Уровень'] == 'Дистанция':
+            return ['background-color: #1f4e78; color: white; font-weight: bold; font-size: 16px'] * len(row)
+        elif row['Уровень'] == 'Зам. ПЧ':
+            return ['background-color: #2e75b6; color: white; font-weight: bold'] * len(row)
+        elif row['Уровень'] == 'ПЧУ':
+            return ['background-color: #deeaf6; color: black; font-weight: bold'] * len(row)
+        return style
+
+    return df.style.apply(apply_row_style, axis=1)\
+        .background_gradient(subset=['Nуч'], cmap='RdYlGn', vmin=3, vmax=5)\
+        .background_gradient(subset=['Полнота %'], cmap='YlOrRd', vmin=80, vmax=100)
+
+# --- ИНТЕРФЕЙС ---
+st.title("📊 Аналитика балловой оценки (Nуч)")
 
 df_struct = load_admin_structure(URL_STRUCT)
 
-if df_struct is not None:
-    st.sidebar.success("Справочник загружен")
-    uploaded_file = st.sidebar.file_uploader("Загрузите файл 'Оценка КМ'", type=["xlsx"])
-    
-    if uploaded_file:
-        try:
-            df_raw = pd.read_excel(uploaded_file, sheet_name="Оценка КМ")
-            df_raw.columns = [str(col).strip().upper() for col in df_raw.columns]
-            
-            main_codes = ['24701', '24602', '24603']
-            df_eval = df_raw[df_raw["КОДНАПР"].astype(str).isin(main_codes)].copy()
+# Загрузка файла на главном экране
+st.info("📌 Загрузите файл 'Оценка КМ' для начала анализа")
+uploaded_file = st.file_uploader("Выбор файла Excel", type=["xlsx"], label_visibility="collapsed")
 
-            pd_plan_map = df_struct.groupby('ПД')['ПЛАН_ДЛИНА'].sum().to_dict()
-            final_stats = []
+if uploaded_file and df_struct is not None:
+    try:
+        df_raw = pd.read_excel(uploaded_file, sheet_name="Оценка КМ")
+        df_raw.columns = [str(col).strip().upper() for col in df_raw.columns]
+        
+        main_codes = ['24701', '24602', '24603']
+        df_eval = df_raw[df_raw["КОДНАПР"].astype(str).isin(main_codes)].copy()
+        pd_plan_map = df_struct.groupby('ПД')['ПЛАН_ДЛИНА'].sum().to_dict()
+        
+        final_stats = []
 
-            # 1. Линейный расчет (ПД)
-            for pd_id, group in df_eval.groupby("ПД"):
-                p_km = pd_plan_map.get(pd_id, 0)
-                final_stats.append(calculate_metrics(f"ПД-{pd_id}", group, "Линейный", p_km))
+        # 1. Линейный (ПД)
+        for pd_id in sorted(df_eval["ПД"].unique()):
+            group = df_eval[df_eval["ПД"] == pd_id]
+            p_km = pd_plan_map.get(pd_id, 0)
+            final_stats.append(calculate_metrics(f"ПД-{pd_id}", group, "Линейный", p_km))
 
-            # 2. Групповой расчет (ПЧ / ПЧЗ / ПЧУ)
-            groups_config = {
-                "ПЧ": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
-                "ПЧЗ Юг": [1, 2, 3, 4, 5, 12],
-                "ПЧЗ Запад": [6, 7, 8, 9, 10, 11, 13, 14, 15],
-                "ПЧУ-1": [1, 2, 3],
-                "ПЧУ-2": [4, 5, 12],
-                "ПЧУ-3": [7, 8, 13],
-                "ПЧУ-4": [9, 10, 11],
-                "ПЧУ-5": [6, 14, 15]
-            }
-            
-            for g_name, pds in groups_config.items():
-                g_data = df_eval[df_eval["ПД"].isin(pds)]
-                g_plan = sum([pd_plan_map.get(p, 0) for p in pds])
-                if not g_data.empty or g_plan > 0:
-                    final_stats.append(calculate_metrics(g_name, g_data, "Групповой", g_plan))
+        # 2. Групповой (ПЧУ)
+        pchu_config = {
+            "ПЧУ-1": [1, 2, 3], "ПЧУ-2": [4, 5, 12], "ПЧУ-3": [7, 8, 13],
+            "ПЧУ-4": [9, 10, 11], "ПЧУ-5": [6, 14, 15]
+        }
+        for name, pds in pchu_config.items():
+            g_data = df_eval[df_eval["ПД"].isin(pds)]
+            g_plan = sum([pd_plan_map.get(p, 0) for p in pds])
+            final_stats.append(calculate_metrics(name, g_data, "ПЧУ", g_plan))
 
-            results_df = pd.DataFrame(final_stats)
+        # 3. Руководство (ПЧЗ / ПЧ)
+        adm_config = {
+            "ПЧЗ Юг": [1, 2, 3, 4, 5, 12],
+            "ПЧЗ Запад": [6, 7, 8, 9, 10, 11, 13, 14, 15],
+            "ПЧ (Дистанция)": list(range(1, 16))
+        }
+        for name, pds in adm_config.items():
+            g_data = df_eval[df_eval["ПД"].isin(pds)]
+            g_plan = sum([pd_plan_map.get(p, 0) for p in pds])
+            lvl = "Дистанция" if "ПЧ (" in name else "Зам. ПЧ"
+            final_stats.append(calculate_metrics(name, g_data, lvl, g_plan))
 
-            # Визуализация данных
-            tab1, tab2 = st.tabs(["📋 Итоги с визуализацией", "🔍 Сверка полноты"])
-            
-            with tab1:
-                try:
-                    # Цветовой градиент для оценки (Nуч) и полноты
-                    st.dataframe(
-                        results_df.style.background_gradient(subset=['Nуч'], cmap='RdYlGn', vmin=3, vmax=5)
-                        .background_gradient(subset=['Полнота %'], cmap='YlOrRd', vmin=80, vmax=100),
-                        use_container_width=True
-                    )
-                except:
-                    st.dataframe(results_df, use_container_width=True)
+        results_df = pd.DataFrame(final_stats)
 
-            with tab2:
-                path_fact = df_eval.groupby(['КОДНАПР', 'ПУТЬ', 'ПД'])['ПРОВЕРЕНО'].sum().reset_index()
-                path_plan = df_struct.groupby(['НАПРАВЛЕНИЕ', 'ПУТЬ', 'ПД'])['ПЛАН_ДЛИНА'].sum().reset_index()
-                detail_check = path_plan.merge(
-                    path_fact, left_on=['НАПРАВЛЕНИЕ','ПУТЬ','ПД'], 
-                    right_on=['КОДНАПР','ПУТЬ','ПД'], how='left'
-                ).fillna(0)
-                detail_check['ДЕФИЦИТ'] = (detail_check['ПЛАН_ДЛИНА'] - detail_check['ПРОВЕРЕНО']).round(3)
-                st.dataframe(detail_check, use_container_width=True)
+        # --- ВКЛАДКИ С РЕЗУЛЬТАТАМИ ---
+        tabs = st.tabs(["📊 Итоги Nуч", "✅ Отличные", "⭐ Хорошие", "⚠️ Удовл.", "🚨 Неуд (Причины)"])
+        
+        with tabs[0]:
+            st.dataframe(style_results(results_df), use_container_width=True, height=600)
 
-        except Exception as e:
-            st.error(f"Ошибка обработки данных: {e}")
+        # Функционал для фильтрации по оценкам
+        for i, score in enumerate([5, 4, 3, 2]):
+            with tabs[i+1]:
+                subset = df_eval[df_eval["ОЦЕНКА"] == score].copy()
+                if subset.empty:
+                    st.write(f"Километры с оценкой {score} не найдены.")
+                else:
+                    if score == 2:
+                        st.warning("⚠️ Требуется немедленное устранение причин неудовлетворительной оценки!")
+                        # Здесь можно добавить логику вывода причин, если в файле есть колонки с типами отступлений
+                        cols_to_show = ["ПД", "КМ", "ПК", "ПУТЬ", "ПРОВЕРЕНО", "БАЛЛ"]
+                        st.dataframe(subset[[c for c in cols_to_show if c in subset.columns]], use_container_width=True)
+                    else:
+                        st.dataframe(subset, use_container_width=True)
+
+    except Exception as e:
+        st.error(f"Ошибка при обработке: {e}")
