@@ -64,11 +64,13 @@ if st.button("🚀 Начать анализ", use_container_width=True):
         df1["DATE"] = make_date(df1)
         df2["DATE"] = make_date(df2)
 
+        # Определение хронологии
         if df1["DATE"].min() < df2["DATE"].min():
             old, new = df1, df2
         else:
             old, new = df2, df1
 
+        # Очистка
         for df in [old, new]:
             for col in ["KOD", "PATH", "OTST", "IS", "STR", "MOST"]:
                 if col in df.columns: df[col] = df[col].astype(str).replace("nan", "").str.strip()
@@ -78,6 +80,7 @@ if st.button("🚀 Начать анализ", use_container_width=True):
         old = old.dropna(subset=["KM", "M", "AMP"])
         new = new.dropna(subset=["KM", "M", "AMP"])
 
+        # Сопоставление
         merged = pd.merge(old, new, on=["KOD", "PATH", "KM", "OTST"], suffixes=("_old", "_new"))
         merged["delta_m"] = abs(merged["M_new"] - merged["M_old"])
         merged = merged[merged["delta_m"] <= tolerance]
@@ -86,69 +89,85 @@ if st.button("🚀 Начать анализ", use_container_width=True):
             subset=["KOD", "PATH", "KM", "M_old", "OTST"], keep="first"
         )
 
-        # Расчет роста по абсолютному значению
+        # Только рост по абсолютному значению
         result = merged[merged["AMP_new"].abs() > merged["AMP_old"].abs()].copy()
         result["Рост"] = (result["AMP_new"].abs() - result["AMP_old"].abs()).round(1)
 
         def get_c(col_name):
             return result[col_name] if col_name in result.columns else ""
 
-        # Формирование итоговой таблицы с сортировкой ПО УБЫВАНИЮ РОСТА
+        # Формирование таблицы в заданном порядке колонок
         df_display = pd.DataFrame({
+            "Код": get_c("KOD"),
             "КМ": get_c("KM"),
             "М": get_c("M_new"),
+            "Путь": get_c("PATH"),
             "Отступление": get_c("OTST"),
-            "Рост (мм)": result["Рост"],
             "Дата (пред)": result["DATE_old"].dt.strftime('%d.%m.%Y'),
             "Амп (пред)": get_c("AMP_old"),
+            "Длина (пред)": get_c("LEN_old"),
+            "Балл (пред)": get_c("BALL_old"),
             "Степень (пред)": get_c("STEP_old"),
             "Дата (тек)": result["DATE_new"].dt.strftime('%d.%m.%Y'),
             "Амп (тек)": get_c("AMP_new"),
+            "Длина (тек)": get_c("LEN_new"),
+            "Балл (тек)": get_c("BALL_new"),
             "Степень (тек)": get_c("STEP_new"),
             "ИС": get_c("IS_old"),
             "СТР": get_c("STR_old"),
             "МОСТ": get_c("MOST_old"),
-            "Путь": get_c("PATH"),
-            "Код": get_c("KOD")
-        }).sort_values("Рост (мм)", ascending=False)
+            "Рост (мм)": result["Рост"] # Рост - последняя колонка
+        }).sort_values("Рост (мм)", ascending=False) # Фильтрация/сортировка по росту
 
-        # Вывод
+        # Вывод в интерфейс
         critical = df_display[df_display["Рост (мм)"] >= 10]
         if not critical.empty:
-            st.error("⚠️ ОБРАТИ ВНИМАНИЕ: Критический рост более 10 мм!")
+            st.error("⚠️ КРИТИЧЕСКИЙ РОСТ (ОБРАТИ ВНИМАНИЕ)")
             st.table(critical)
         
-        danger = df_display[(df_display["Рост (мм)"] >= 5) & (df_display["Рост (мм)"] < 10)]
-        st.subheader("❗ Опасный рост (от 5 до 10 мм)")
-        st.dataframe(danger, use_container_width=True)
+        st.subheader("📋 Список выявленного роста")
+        st.dataframe(df_display, use_container_width=True)
 
-        with st.expander("Весь список изменений"):
-            st.dataframe(df_display, use_container_width=True)
-
-        # Экспорт
+        # Функция экспорта с форматированием
         def to_excel(df):
-            from openpyxl.styles import PatternFill
+            from openpyxl.styles import PatternFill, Alignment, Border, Side
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine="openpyxl") as writer:
-                df.to_excel(writer, index=False, sheet_name="Анализ")
-                ws = writer.book["Анализ"]
+                df.to_excel(writer, index=False, sheet_name="Анализ_Роста")
+                ws = writer.book["Анализ_Роста"]
+                
                 red_fill = PatternFill(start_color="FF9999", fill_type="solid")
+                center_align = Alignment(horizontal="center", vertical="center")
+                thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), 
+                                     top=Side(style='thin'), bottom=Side(style='thin'))
                 
-                # Поиск индекса колонки Рост
-                col_idx = df.columns.get_loc("Рост (мм)") + 1
-                for row in range(2, ws.max_row + 1):
-                    val = ws.cell(row=row, column=col_idx).value
-                    if val and val >= 5:
-                        ws.cell(row=row, column=col_idx).fill = red_fill
+                growth_col_idx = df.columns.get_loc("Рост (мм)") + 1
                 
+                for row in ws.iter_rows(min_row=1, max_row=ws.max_row):
+                    for cell in row:
+                        # 1. Выравнивание по центру всей таблицы
+                        cell.alignment = center_align
+                        # 2. Сетка
+                        cell.border = thin_border
+                        
+                        # 3. Подсветка роста в последней колонке
+                        if cell.row > 1 and cell.column == growth_col_idx:
+                            if cell.value and cell.value >= 5:
+                                cell.fill = red_fill
+                
+                # Автоподбор ширины
                 for col in ws.columns:
-                    max_length = max(len(str(cell.value)) for cell in col)
-                    ws.column_dimensions[col[0].column_letter].width = max_length + 2
+                    max_len = max(len(str(cell.value)) for cell in col)
+                    ws.column_dimensions[col[0].column_letter].width = max_len + 3
+                    
             output.seek(0)
             return output
 
         filename = f"Мониторинг_роста_амплитуд_{datetime.now().strftime('%d.%m.%Y')}.xlsx"
-        st.download_button("📥 Скачать Excel", data=to_excel(df_display), file_name=filename)
+        st.download_button("📥 Скачать Excel с форматированием", 
+                           data=to_excel(df_display), 
+                           file_name=filename,
+                           use_container_width=True)
 
     except Exception as e:
         st.error(f"Ошибка: {e}")
