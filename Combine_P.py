@@ -31,7 +31,7 @@ with col1:
     st.subheader("📊 Калькулятор Nuch")
     st.write("Расчет балловой оценки состояния пути.")
     if st.button("Открыть Модуль Nuch", key="btn1", use_container_width=True):
-        st.switch_page("pages/1_Km.py")
+        st.switch_page("pages/1_Nuch_Combine_P.py")
     st.markdown('</div>', unsafe_allow_html=True)
 
 # --- МОДУЛЬ 2 ---
