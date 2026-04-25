@@ -1,8 +1,9 @@
 import streamlit as st
 import pandas as pd
 import io
+from datetime import datetime
 
-st.set_page_config(page_title="Рост отступлений", layout="wide")
+st.set_page_config(page_title="Мониторинг роста амплитуд", layout="wide")
 
 # ==============================
 # НОРМАЛИЗАЦИЯ
@@ -36,20 +37,20 @@ def make_date(df):
     )
 
 # ==============================
-# UI
+# UI ИНТЕРФЕЙС
 # ==============================
 st.title("📊 Мониторинг роста амплитуд")
 
 c1, c2 = st.columns(2)
 with c1:
-    file1 = st.file_uploader("Загрузите файл предыдущей проверки", type=["xlsx"])
+    file1 = st.file_uploader("Файл предыдущей проверки", type=["xlsx"])
 with c2:
-    file2 = st.file_uploader("Загрузите файл текущей проверки", type=["xlsx"])
+    file2 = st.file_uploader("Файл текущей проверки", type=["xlsx"])
 
-tolerance = st.number_input("Допуск по метрам (поиск совпадений)", value=3)
+tolerance = st.number_input("Допуск по метрам для поиска совпадений", value=3)
 
 # ==============================
-# ОБРАБОТКА
+# ЛОГИКА ОБРАБОТКИ
 # ==============================
 if st.button("🚀 Начать анализ", use_container_width=True):
 
@@ -64,13 +65,13 @@ if st.button("🚀 Начать анализ", use_container_width=True):
         df1["DATE"] = make_date(df1)
         df2["DATE"] = make_date(df2)
 
-        # Хронология
+        # Авто-определение хронологии (что старое, что новое)
         if df1["DATE"].min() < df2["DATE"].min():
             old, new = df1, df2
         else:
             old, new = df2, df1
 
-        # Очистка
+        # Очистка данных
         for df in [old, new]:
             for col in ["KOD", "PATH", "OTST"]:
                 if col in df.columns: df[col] = df[col].astype(str).str.strip()
@@ -80,7 +81,7 @@ if st.button("🚀 Начать анализ", use_container_width=True):
         old = old.dropna(subset=["KM", "M", "AMP"])
         new = new.dropna(subset=["KM", "M", "AMP"])
 
-        # Объединение
+        # Сопоставление (Merge)
         merged = pd.merge(old, new, on=["KOD", "PATH", "KM", "OTST"], suffixes=("_old", "_new"))
         merged["delta_m"] = abs(merged["M_new"] - merged["M_old"])
         merged = merged[merged["delta_m"] <= tolerance]
@@ -89,7 +90,7 @@ if st.button("🚀 Начать анализ", use_container_width=True):
             subset=["KOD", "PATH", "KM", "M_old", "OTST"], keep="first"
         )
 
-        # Расчет роста (по модулю)
+        # Фильтрация только тех, где амплитуда выросла (по модулю)
         result = merged[merged["AMP_new"].abs() > merged["AMP_old"].abs()].copy()
         result["Рост"] = (result["AMP_new"].abs() - result["AMP_old"].abs()).round(1)
 
@@ -97,11 +98,10 @@ if st.button("🚀 Начать анализ", use_container_width=True):
             st.warning("Совпадений с ростом амплитуды не найдено.")
             st.stop()
 
-        # Функция для безопасного получения колонки
+        # Формирование итоговой таблицы с сортировкой ОТ МАКС К МИН
         def get_c(col_name):
             return result[col_name] if col_name in result.columns else ""
 
-        # Формирование таблицы согласно вашему запросу
         df_display = pd.DataFrame({
             "Код": get_c("KOD"),
             "Путь": get_c("PATH"),
@@ -119,50 +119,50 @@ if st.button("🚀 Начать анализ", use_container_width=True):
             "Балл (тек)": get_c("BALL_new"),
             "Степень (тек)": get_c("STEP_new"),
             "Рост (мм)": result["Рост"]
-        })
+        }).sort_values("Рост (мм)", ascending=False) # Сортировка здесь
 
         # ==============================
-        # ИНТЕРФЕЙС ВЫВОДА
+        # ВЫВОД РЕЗУЛЬТАТОВ В ТАБЛИЦЫ
         # ==============================
         
-        critical = df_display[df_display["Рост (мм)"] >= 10].sort_values("Рост (мм)", ascending=False)
+        # Блок критического роста
+        critical = df_display[df_display["Рост (мм)"] >= 10]
         if not critical.empty:
             st.error("⚠️ ОБРАТИ ВНИМАНИЕ: Критический рост более 10 мм!")
             st.table(critical)
         
+        # Блок опасного роста
         danger = df_display[(df_display["Рост (мм)"] >= 5) & (df_display["Рост (мм)"] < 10)]
         st.subheader("❗ Опасный рост (от 5 до 10 мм)")
         if not danger.empty:
-            st.dataframe(danger.sort_values("Рост (мм)", ascending=False), use_container_width=True)
+            st.dataframe(danger, use_container_width=True)
         else:
-            st.write("Точек роста от 5 до 10 мм не обнаружено.")
+            st.info("Точек роста от 5 до 10 мм не обнаружено.")
 
-        with st.expander("Показать все найденные изменения"):
-            st.dataframe(df_display.sort_values("Рост (мм)", ascending=False), use_container_width=True)
+        with st.expander("Показать полный список изменений"):
+            st.dataframe(df_display, use_container_width=True)
 
         # ==============================
-        # ЭКСПОРТ EXCEL С РАСШИРЕННЫМИ КОЛОНКАМИ
+        # ЭКСПОРТ В EXCEL
         # ==============================
         def to_excel(df):
-            from openpyxl.styles import PatternFill, Font, Alignment
+            from openpyxl.styles import PatternFill, Font
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine="openpyxl") as writer:
-                df.to_excel(writer, index=False, sheet_name="Рост")
-                ws = writer.book["Рост"]
+                df.to_excel(writer, index=False, sheet_name="АнализРоста")
+                ws = writer.book["АнализРоста"]
                 
-                # Стилизация заголовков и ячеек
-                header_font = Font(bold=True)
                 red_fill = PatternFill(start_color="FF9999", fill_type="solid")
+                header_font = Font(bold=True)
                 
-                # Поиск индекса колонки "Рост (мм)" (она последняя)
+                # Подсветка роста >= 5 мм
                 growth_col_idx = df.columns.get_loc("Рост (мм)") + 1
-                
                 for row in range(2, ws.max_row + 1):
                     val = ws.cell(row=row, column=growth_col_idx).value
                     if val and val >= 5:
                         ws.cell(row=row, column=growth_col_idx).fill = red_fill
                 
-                # Автоподбор ширины колонок
+                # Настройка ширины колонок
                 for col in ws.columns:
                     max_length = 0
                     column = col[0].column_letter
@@ -176,12 +176,16 @@ if st.button("🚀 Начать анализ", use_container_width=True):
             output.seek(0)
             return output
 
+        # Имя файла: НазваниеМодуля_Дата.xlsx
+        current_date_str = datetime.now().strftime("%d.%m.%Y")
+        file_name_ready = f"Мониторинг_роста_амплитуд_{current_date_str}.xlsx"
+
         st.download_button(
-            label="📥 Скачать полный отчет (Excel)",
+            label="📥 Скачать отчет (Excel)",
             data=to_excel(df_display),
-            file_name="growth_analysis_report.xlsx",
+            file_name=file_name_ready,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
     except Exception as e:
-        st.error(f"Ошибка при обработке: {e}")
+        st.error(f"Произошла ошибка: {str(e)}")
