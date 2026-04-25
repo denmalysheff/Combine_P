@@ -106,7 +106,8 @@ if uploaded_file and df_struct is not None:
         current_date = datetime.now().strftime("%d_%m_%Y")
         file_name = f"Nuch_Report_{current_date}.xlsx"
         
-        # Колонки для вкладок КМ
+        # Список колонок, которые ОБЯЗАТЕЛЬНО должны быть во вкладках
+        # Включаем КМ в список явно
         target_cols = ["КОДНАПР", "ПУТЬ", "ПД", "КМ", "ОЦЕНКА", "ПРИЧИНА"]
         
         buffer = io.BytesIO()
@@ -115,9 +116,9 @@ if uploaded_file and df_struct is not None:
             
             for score, s_name in {5: "Отличные", 4: "Хорошие", 3: "Удовл", 2: "Неуд"}.items():
                 subset = df_eval[df_eval["ОЦЕНКА"] == score]
-                # Явно проверяем наличие колонки КМ и остальных
-                available_cols = [c for c in target_cols if c in subset.columns]
-                subset_to_save = subset[available_cols]
+                # Фильтруем колонки, которые реально существуют в загруженном файле
+                cols_to_save = [c for c in target_cols if c in subset.columns]
+                subset_to_save = subset[cols_to_save]
                 subset_to_save.to_excel(writer, sheet_name=s_name, index=False)
             
             from openpyxl.styles import Alignment
@@ -134,7 +135,7 @@ if uploaded_file and df_struct is not None:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
-        # --- ТАБЛИЦЫ ---
+        # --- ТАБЛИЦЫ В STREAMLIT ---
         tabs = st.tabs(["📊 Итоги Nуч", "✅ Отличные", "⭐ Хорошие", "⚠️ Удовл.", "🚨 Неуд"])
         
         with tabs[0]:
@@ -143,10 +144,10 @@ if uploaded_file and df_struct is not None:
         for i, score in enumerate([5, 4, 3, 2]):
             with tabs[i+1]:
                 subset = df_eval[df_eval["ОЦЕНКА"] == score]
-                available_display = [c for c in target_cols if c in subset.columns]
+                cols_to_show = [c for c in target_cols if c in subset.columns]
                 
                 if not subset.empty:
-                    st.dataframe(subset[available_display], use_container_width=True)
+                    st.dataframe(subset[cols_to_show], use_container_width=True)
                 else:
                     st.info(f"Километров с оценкой {score} не обнаружено.")
 
