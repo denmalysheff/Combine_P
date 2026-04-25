@@ -1,113 +1,216 @@
 import streamlit as st
 import pandas as pd
-import io
-import plotly.express as px
-from openpyxl.styles import PatternFill
 
-st.set_page_config(page_title="Анализ роста отступлений", layout="wide")
+st.set_page_config(page_title="Рост отступлений", layout="wide")
 
-# --- 1. ФУНКЦИЯ БЕЗОПАСНОЙ НОРМАЛИЗАЦИИ ---
-def normalize_dataframe(df):
-    """
-    Приводит заголовки к стандарту и исправляет типы данных.
-    Исключает ошибку 'DataFrame object has no attribute str'.
-    """
-    # Очистка заголовков: убираем пробелы и переводим в верхний регистр
-    df.columns = [str(col).strip().upper() for col in df.columns]
-    
-    # Карта синонимов для унификации (КМ/KM, ПУТЬ/PATH и т.д.)
-    rename_map = {
-        "КМ": "KM", "KM": "KM",
-        "М": "M", "M": "M",
-        "КОДНАПРВ": "KOD", "КОД": "KOD", "KOD": "KOD",
-        "ПУТЬ": "PATH", "PATH": "PATH",
-        "АМПЛИТУДА": "AMP", "AMP": "AMP",
-        "ОТСТУПЛЕНИЕ": "OTST", "OTST": "OTST"
-    }
-    df = df.rename(columns=rename_map)
+# ==============================
+# НОРМАЛИЗАЦИЯ
+# ==============================
+def normalize_columns(df):
+    new_cols = {}
 
-    # Исправляем KOD (Код направления)
-    if "KOD" in df.columns:
-        # Критично: сначала .astype(str), потом .str.replace
-        df["KOD"] = df["KOD"].astype(str).str.replace(".0", "", regex=False)
-    
-    # Безопасное преобразование числовых колонок
-    for col in ["KM", "M", "AMP"]:
-        if col in df.columns:
-            # Превращаем в строку -> меняем запятую на точку -> в число
-            df[col] = pd.to_numeric(df[col].astype(str).str.replace(",", "."), errors="coerce")
-            
-    return df
+    for col in df.columns:
+        c = col.strip().upper()
 
-# --- 2. ИНТЕРФЕЙС ПРИЛОЖЕНИЯ ---
-st.title("📈 Динамика-О: Анализ роста")
-st.write("Сравнение амплитуд отступлений между двумя проходами.")
+        if c in ["КМ", "KM"]:
+            new_cols[col] = "KM"
+        elif c in ["М", "M"]:
+            new_cols[col] = "M"
+        elif c in ["КОДНАПРВ"]:
+            new_cols[col] = "KOD"
+        elif c in ["ПУТЬ"]:
+            new_cols[col] = "PATH"
+        elif c in ["АМПЛИТУДА"]:
+            new_cols[col] = "AMP"
+        elif c in ["ДЛИНА"]:
+            new_cols[col] = "LEN"
+        elif c in ["СТЕПЕНЬ"]:
+            new_cols[col] = "STEP"
+        elif c in ["ОТСТУПЛЕНИЕ"]:
+            new_cols[col] = "OTST"
+        elif c in ["БАЛЛ"]:
+            new_cols[col] = "BALL"
+        elif c in ["ИС"]:
+            new_cols[col] = "IS"
+        elif c in ["СТРЕЛКА"]:
+            new_cols[col] = "STR"
+        elif c in ["МОСТ"]:
+            new_cols[col] = "MOST"
+        elif c in ["ГОД"]:
+            new_cols[col] = "YEAR"
+        elif c in ["МЕСЯЦ"]:
+            new_cols[col] = "MONTH"
+        elif c in ["ДЕНЬ"]:
+            new_cols[col] = "DAY"
+        else:
+            new_cols[col] = col
 
-c1, c2 = st.columns(2)
-with c1:
-    f_old = st.file_uploader("📂 Прошлый проход (Excel)", type=["xlsx"], key="old_ots")
-with c2:
-    f_new = st.file_uploader("📂 Текущий проход (Excel)", type=["xlsx"], key="new_ots")
+    return df.rename(columns=new_cols)
 
-if f_old and f_new:
+
+def to_numeric(series):
+    return pd.to_numeric(series.astype(str).str.replace(",", "."), errors="coerce")
+
+
+def make_date(df):
+    return pd.to_datetime(
+        df["YEAR"].astype(str) + "-" +
+        df["MONTH"].astype(str) + "-" +
+        df["DAY"].astype(str),
+        errors="coerce"
+    )
+
+
+# ==============================
+# UI
+# ==============================
+st.title("📊 Рост отступлений")
+
+file1 = st.file_uploader("Загрузите Файл 1", type=["xlsx"])
+file2 = st.file_uploader("Загрузите Файл 2", type=["xlsx"])
+
+tolerance = st.number_input("Допуск (м)", value=3)
+
+# ==============================
+# ОБРАБОТКА
+# ==============================
+if st.button("Запуск"):
+
+    if not file1 or not file2:
+        st.error("Загрузите оба файла")
+        st.stop()
+
     try:
-        with st.spinner("Синхронизация данных..."):
-            # Загрузка и нормализация
-            df_old = normalize_dataframe(pd.read_excel(f_old))
-            df_new = normalize_dataframe(pd.read_excel(f_new))
+        df1 = pd.read_excel(file1, sheet_name="Отступления")
+        df2 = pd.read_excel(file2, sheet_name="Отступления")
 
-            # Проверка обязательных полей
-            req = {"KM", "M", "AMP", "OTST"}
-            if not req.issubset(df_new.columns):
-                st.error(f"В файлах не найдены колонки: {req - set(df_new.columns)}")
-                st.stop()
+        df1 = normalize_columns(df1)
+        df2 = normalize_columns(df2)
 
-            # Синхронизация по метрам (округление до 2м для поиска совпадений)
-            df_old['M_S'] = (df_old['M'] / 2).round() * 2
-            df_new['M_S'] = (df_new['M'] / 2).round() * 2
+        df1["DATE"] = make_date(df1)
+        df2["DATE"] = make_date(df2)
 
-            # Объединение (Merge)
-            merged = pd.merge(
-                df_new, 
-                df_old[['KOD', 'PATH', 'KM', 'M_S', 'OTST', 'AMP']], 
-                on=['KOD', 'PATH', 'KM', 'M_S', 'OTST'], 
-                how='inner', 
-                suffixes=('', '_OLD')
-            )
+        # старый / новый
+        if df1["DATE"].min() < df2["DATE"].min():
+            old, new = df1, df2
+        else:
+            old, new = df2, df1
 
-            # Вычисление роста
-            merged['РОСТ'] = (merged['AMP'] - merged['AMP_OLD']).round(1)
-            df_result = merged[merged['РОСТ'] > 0].sort_values(by='РОСТ', ascending=False)
+        # очистка
+        for df in [old, new]:
+            df["KOD"] = df["KOD"].astype(str).str.strip()
+            df["PATH"] = df["PATH"].astype(str).str.strip()
+            df["OTST"] = df["OTST"].astype(str).str.strip()
 
-            if not df_result.empty:
-                st.subheader(f"📊 Выявлено точек роста: {len(df_result)}")
-                
-                # Визуализация
-                fig = px.scatter(
-                    df_result, x="KM", y="РОСТ", size="AMP", color="OTST",
-                    hover_data=['M', 'AMP_OLD', 'AMP'],
-                    title="Распределение роста амплитуд по километрам"
-                )
-                st.plotly_chart(fig, use_container_width=True)
+            for col in ["KM", "M", "AMP", "LEN", "BALL"]:
+                if col in df.columns:
+                    df[col] = to_numeric(df[col])
 
-                # Таблица
-                disp_cols = ['KOD', 'PATH', 'KM', 'M', 'OTST', 'AMP_OLD', 'AMP', 'РОСТ']
-                st.dataframe(df_result[disp_cols], use_container_width=True)
-                
-                # Экспорт в Excel с подсветкой
-                output = io.BytesIO()
-                with pd.ExcelWriter(output, engine="openpyxl") as writer:
-                    df_result[disp_cols].to_excel(writer, index=False, sheet_name="Рост")
-                    ws = writer.book["Рост"]
-                    red = PatternFill(start_color="FF9999", fill_type="solid")
+        old = old.dropna(subset=["KM", "M", "AMP"])
+        new = new.dropna(subset=["KM", "M", "AMP"])
+
+        # ==============================
+        # MERGE
+        # ==============================
+        merged = pd.merge(
+            old,
+            new,
+            on=["KOD", "PATH", "KM", "OTST"],
+            suffixes=("_old", "_new")
+        )
+
+        merged["delta_m"] = abs(merged["M_new"] - merged["M_old"])
+        merged = merged[merged["delta_m"] <= tolerance]
+
+        merged = merged.sort_values("delta_m").drop_duplicates(
+            subset=["KOD", "PATH", "KM", "M_old"],
+            keep="first"
+        )
+
+        result = merged[merged["AMP_new"] > merged["AMP_old"]].copy()
+
+        # ==============================
+        # ФИНАЛ
+        # ==============================
+        def safe_col(df, name):
+            return df[name] if name in df.columns else None
+
+        df_result = pd.DataFrame({
+            "Дата_старая": result["DATE_old"],
+            "Дата_новая": result["DATE_new"],
+            "Код направления": result["KOD"],
+            "Путь": result["PATH"],
+            "КМ": result["KM"],
+            "М": result["M_old"],
+            "Отступление": result["OTST"],
+            "Степень": safe_col(result, "STEP_old"),
+            "Амплитуда": result["AMP_old"],
+            "Длина": safe_col(result, "LEN_old"),
+            "Балл": safe_col(result, "BALL_old"),
+
+            "М после": result["M_new"],
+
+            "Степень после": safe_col(result, "STEP_new"),
+            "Амплитуда после": result["AMP_new"],
+            "Длина после": safe_col(result, "LEN_new"),
+            "Балл после": safe_col(result, "BALL_new"),
+
+            "ИС": safe_col(result, "IS_old"),
+            "СТРЕЛКА": safe_col(result, "STR_old"),
+            "МОСТ": safe_col(result, "MOST_old"),
+
+            "Рост": result["AMP_new"] - result["AMP_old"]
+        })
+
+        st.success(f"Найдено записей: {len(df_result)}")
+
+        st.dataframe(df_result, use_container_width=True)
+
+        # ==============================
+        # СКАЧИВАНИЕ
+        # ==============================
+        def to_excel(df):
+            import io
+            from openpyxl import Workbook
+            from openpyxl.styles import PatternFill
+
+            output = io.BytesIO()
+
+            with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                df.to_excel(writer, index=False, sheet_name="Результат")
+
+                ws = writer.book["Результат"]
+
+                red = PatternFill(start_color="FF9999", fill_type="solid")
+                yellow = PatternFill(start_color="FFFF99", fill_type="solid")
+
+                growth_col = None
+                for col in ws.iter_cols(1, ws.max_column):
+                    if col[0].value == "Рост":
+                        growth_col = col[0].column
+                        break
+
+                if growth_col:
                     for row in range(2, ws.max_row + 1):
-                        # Подсвечиваем ячейку "РОСТ" (8-я колонка), если рост > 5мм
-                        if ws.cell(row=row, column=8).value > 5:
-                            ws.cell(row=row, column=8).fill = red
-                
-                st.download_button("📥 Скачать результат (Excel)", output.getvalue(), "growth_report.xlsx")
-            else:
-                st.success("✅ Совпадающих отступлений с ростом амплитуды не найдено.")
+                        val = ws.cell(row=row, column=growth_col).value
+
+                        if val is None:
+                            continue
+
+                        if val > 5:
+                            ws.cell(row=row, column=growth_col).fill = red
+                        elif val > 2:
+                            ws.cell(row=row, column=growth_col).fill = yellow
+
+            output.seek(0)
+            return output
+
+        st.download_button(
+            label="📥 Скачать Excel",
+            data=to_excel(df_result),
+            file_name="result.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
     except Exception as e:
-        st.error(f"❌ Ошибка при обработке: {e}")
+        st.error(str(e))
