@@ -48,7 +48,7 @@ def normalize_dataframe(df):
     return df
 
 # --- 2. ИНТЕРФЕЙС ---
-st.title("📈 Динамика-О: Анализ роста")
+st.title("📈 Динамика отступлений")
 st.write("Сравнение амплитуд отступлений между двумя проходами.")
 
 col_f1, col_f2 = st.columns(2)
