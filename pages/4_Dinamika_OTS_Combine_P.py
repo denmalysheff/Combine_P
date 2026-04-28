@@ -100,7 +100,7 @@ if st.button("🚀 Начать анализ", use_container_width=True):
         df_display = pd.DataFrame({
             "Код": get_c("KOD"),
             "КМ": get_c("KM"),
-            "М": get_c("M_new"),
+            "М (пред)": get_c("M_old"), # Добавил для наглядности сравнения
             "Путь": get_c("PATH"),
             "Отступление": get_c("OTST"),
             "Дата (пред)": result["DATE_old"].dt.strftime('%d.%m.%Y'),
@@ -109,6 +109,7 @@ if st.button("🚀 Начать анализ", use_container_width=True):
             "Балл (пред)": get_c("BALL_old"),
             "Степень (пред)": get_c("STEP_old"),
             "Дата (тек)": result["DATE_new"].dt.strftime('%d.%m.%Y'),
+            "М (тек)": get_c("M_new"),  # <--- НОВАЯ КОЛОНКА ЗДЕСЬ
             "Амп (тек)": get_c("AMP_new"),
             "Длина (тек)": get_c("LEN_new"),
             "Балл (тек)": get_c("BALL_new"),
@@ -116,8 +117,8 @@ if st.button("🚀 Начать анализ", use_container_width=True):
             "ИС": get_c("IS_old"),
             "СТР": get_c("STR_old"),
             "МОСТ": get_c("MOST_old"),
-            "Рост (мм)": result["Рост"] # Рост - последняя колонка
-        }).sort_values("Рост (мм)", ascending=False) # Фильтрация/сортировка по росту
+            "Рост (мм)": result["Рост"] 
+        }).sort_values("Рост (мм)", ascending=False)
 
         # Вывод в интерфейс
         critical = df_display[df_display["Рост (мм)"] >= 10]
