@@ -65,8 +65,8 @@ with col4:
 # --- МОДУЛЬ 5 ---
 with col5:
     st.markdown('<div class="module-card">', unsafe_allow_html=True)
-    st.subheader("👥 Резерв")
-    st.write("Резерв.")
+    st.subheader("👥 План устранения отступлений")
+    st.write("Формирование плана.")
     if st.button("Резерв", key="btn5", use_container_width=True):
         st.switch_page("pages/5_Staff.py")
     st.markdown('</div>', unsafe_allow_html=True)
