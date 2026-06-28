@@ -4,9 +4,6 @@ import io
 from datetime import datetime
 from openpyxl.styles import Alignment, Font
 
-# Настройка страницы Streamlit
-st.set_page_config(page_title="Формирование плана устранения отступлений", layout="wide")
-
 def normalize_column_name(col):
     """Нормализует имя столбца или вкладки для защиты от ошибок раскладки (РУС/ENG) и пробелов"""
     if not isinstance(col, str):
@@ -126,12 +123,25 @@ def process_track_data(uploaded_file, exclude_curves=False):
         forbidden_defects = ['ПРУ', 'ДНПРОФ', 'КРИВАЯ', 'АНП']
         df_defects = df_defects[~df_defects['TMP_DEF_NAME'].isin(forbidden_defects)]
 
+    # --- ОПРЕДЕЛЕНИЕ КАТЕГОРИЙ ДЕФЕКТОВ ---
     df_defects['IS_2_PR'] = (df_defects['INT_СТЕПЕНЬ'] == 2) & (df_defects[col_pr].astype(str).str.contains('1', na=False) if col_pr else False)
     df_defects['IS_2_REGULAR'] = (df_defects['INT_СТЕПЕНЬ'] == 2) & (~df_defects['IS_2_PR'])
     df_defects['IS_3'] = df_defects['INT_СТЕПЕНЬ'] == 3
     df_defects['IS_4'] = df_defects['INT_СТЕПЕНЬ'] == 4
 
-    df_valid_defects = df_defects[df_defects['INT_СТЕПЕНЬ'].isin([2, 3, 4])].copy()
+    # Новое условие: Отступление ПР.Л или ПР.П, Степень > 1, ИС == 1
+    if col_defect and col_is:
+        df_defects['TMP_DEF_UPPER'] = df_defects[col_defect].astype(str).str.strip().str.upper()
+        df_defects['IS_PROSADKA_IS'] = (
+            df_defects['TMP_DEF_UPPER'].isin(['ПР.Л', 'ПР.П', 'ПР Л', 'ПР П']) & 
+            (df_defects['INT_СТЕПЕНЬ'] > 1) & 
+            (df_defects[col_is].apply(safe_int) == 1)
+        )
+    else:
+        df_defects['IS_PROSADKA_IS'] = False
+
+    # Корректируем выборку валидных дефектов: берём стандартные 2,3,4 степени ИЛИ наши просадки на ИС
+    df_valid_defects = df_defects[df_defects['INT_СТЕПЕНЬ'].isin([2, 3, 4]) | df_defects['IS_PROSADKA_IS']].copy()
 
     def aggregate_km_defects(group):
         count_2 = group['IS_2_REGULAR'].sum()
@@ -140,7 +150,11 @@ def process_track_data(uploaded_file, exclude_curves=False):
         count_4 = group['IS_4'].sum()
         
         list_desc = []
-        text_rows = group[group['IS_3'] | group['IS_4'] | group['IS_2_PR']]
+        # В перечень выводим 3ст, 4ст, 2к3ст, А ТАКЖЕ просадки ПР.Л/ПР.П на ИС (>1 степени)
+        text_rows = group[group['IS_3'] | group['IS_4'] | group['IS_2_PR'] | group['IS_PROSADKA_IS']]
+        
+        # Удаляем дубликаты строк по метру и типу отступления, чтобы не двоило, если одна запись подошла под два условия
+        text_rows = text_rows.drop_duplicates(subset=[col_meter, col_defect]) if col_meter and col_defect else text_rows
         
         for _, row in text_rows.iterrows():
             m_val = str(safe_int(row[col_meter])) if col_meter else "0"
@@ -208,7 +222,6 @@ def process_track_data(uploaded_file, exclude_curves=False):
     unique_pds = [x for x in final_df['ПД'].unique() if x not in ['', 'nan', 'None']]
     unique_pds_sorted = sorted(unique_pds, key=pd_sheet_sort_key)
 
-    # Запись в буфер памяти вместо жесткого диска
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         for pd_name in unique_pds_sorted:
@@ -278,8 +291,8 @@ def process_track_data(uploaded_file, exclude_curves=False):
     return processed_data
 
 # --- Веб-Интерфейс Streamlit ---
-st.title("📋 План устранения отступлений")
-st.subheader("Формирование списка отступлений по проходу вагона-путеизмерителя")
+st.title("📋 Аналитика путеизмерителя: План устранения отступлений")
+st.subheader("Автоматическое разделение по околоткам (ПД)")
 
 uploaded_file = st.file_uploader("Выберите исходный Excel-файл с вагона", type=["xlsx", "xls"])
 exclude_curves = st.checkbox("Исключить оценку кривых (ПрУ, ДНпроф, Кривая, Анп)")
@@ -288,16 +301,13 @@ if uploaded_file is not None:
     if st.button("Сформировать и рассчитать план", type="primary"):
         with st.spinner("⏳ Выполняются вычисления... Пожалуйста, подождите."):
             try:
-                # Обработка данных
                 excel_data = process_track_data(uploaded_file, exclude_curves=exclude_curves)
                 
-                # Генерация имени файла
                 current_time = datetime.now().strftime("%d-%m-%Y_%H-%M")
                 file_title = f"Plan_ustr_otst_24701_{current_time}.xlsx"
                 
                 st.success("✅ Расчет успешно завершен!")
                 
-                # Кнопка для скачивания готового результата
                 st.download_button(
                     label="📥 Скачать готовый план (Excel)",
                     data=excel_data,
