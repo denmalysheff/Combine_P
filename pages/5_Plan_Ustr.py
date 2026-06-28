@@ -86,7 +86,6 @@ def process_track_data(uploaded_file, exclude_curves=False):
         p = str(row[col_lim_pass]).split('.')[0].strip() if col_lim_pass and pd.notna(row[col_lim_pass]) else "-"
         g = str(row[col_lim_gruz]).split('.')[0].strip() if col_lim_gruz and pd.notna(row[col_lim_gruz]) else "-"
         
-        # Исправлено: '0' и '0.0' теперь пропускаются и обрабатываются как реальное ограничение
         if p in ['', 'nan', '-']: p = "-"
         if g in ['', 'nan', '-']: g = "-"
         
@@ -109,6 +108,10 @@ def process_track_data(uploaded_file, exclude_curves=False):
     col_most = find_column(df_defects, 'МОСТ')
     col_pr = find_column(df_defects, 'PR_PREDUPR')
     col_score_def = find_column(df_defects, 'БАЛЛ')
+    
+    # Попробуем найти локальные ограничения в самом листе отступлений, если они там есть
+    col_def_lim_p = find_column(df_defects, 'СК_ОГР_ПАСС') or find_column(df_defects, 'ДОП_ПАСС')
+    col_def_lim_g = find_column(df_defects, 'СК_ОГР_ГРУЗ') or find_column(df_defects, 'ДОП_ГРУЗ')
 
     if not col_km_def or not col_degree:
         raise KeyError("В листе 'Отступления' не найдены столбцы КМ (КМ М) или СТЕПЕНЬ.")
@@ -126,8 +129,28 @@ def process_track_data(uploaded_file, exclude_curves=False):
         forbidden_defects = ['ПРУ', 'ДНПРОФ', 'КРИВАЯ', 'АНП']
         df_defects = df_defects[~df_defects['TMP_DEF_NAME'].isin(forbidden_defects)]
 
-    # --- ОПРЕДЕЛЕНИЕ КАТЕГОРИЙ ДЕФЕКТОВ ---
-    df_defects['IS_2_PR'] = (df_defects['INT_СТЕПЕНЬ'] == 2) & (df_defects[col_pr].astype(str).str.contains('1', na=False) if col_pr else False)
+    # --- УЛУЧШЕННАЯ ПРОВЕРКА ОГРАНИЧЕНИЙ ДЛЯ 2 СТЕПЕНИ (2к3ст) ---
+    def check_is_2_pr(row):
+        if safe_int(row['INT_СТЕПЕНЬ']) != 2:
+            return False
+        
+        # 1. Проверка по значению признака предупреждения (любое непустое, кроме '0' или '-')
+        if col_pr:
+            pr_val = str(row[col_pr]).strip().upper()
+            if pr_val not in ['0', '0.0', '', 'NAN', 'NONE', '-']:
+                return True
+                
+        # 2. Проверка по локальной скорости в строке отступления (если скорость урезана, например до 25)
+        if col_def_lim_p and pd.notna(row[col_def_lim_p]):
+            try:
+                spd_p = float(row[col_def_lim_p])
+                if 0 < spd_p < 140: # Если стоит реальное ограничение скорости
+                    return True
+            except ValueError:
+                pass
+        return False
+
+    df_defects['IS_2_PR'] = df_defects.apply(check_is_2_pr, axis=1)
     df_defects['IS_2_REGULAR'] = (df_defects['INT_СТЕПЕНЬ'] == 2) & (~df_defects['IS_2_PR'])
     df_defects['IS_3'] = df_defects['INT_СТЕПЕНЬ'] == 3
     df_defects['IS_4'] = df_defects['INT_СТЕПЕНЬ'] == 4
@@ -161,7 +184,10 @@ def process_track_data(uploaded_file, exclude_curves=False):
         for _, row in text_rows.iterrows():
             m_val = str(safe_int(row[col_meter])) if col_meter else "0"
             def_type = str(row[col_defect]).strip() if col_defect else "ОТСТ"
+            
+            # Если это 2 степень с ограничением скорости, пишем "2к3ст"
             deg_str = "2к3ст" if row['IS_2_PR'] else f"{safe_int(row['INT_СТЕПЕНЬ'])}ст"
+            
             ampl = str(safe_int(row[col_ampl])) if col_ampl else "0"
             length = str(safe_int(row[col_len])) if col_len else "0"
             def_score = str(safe_int(row[col_score_def])) if col_score_def else "0"
