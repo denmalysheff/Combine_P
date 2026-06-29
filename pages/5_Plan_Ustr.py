@@ -1,8 +1,9 @@
 import pandas as pd
 import streamlit as st
 import io
-from datetime import datetime
-from openpyxl.styles import Alignment, Font
+from datetime import datetime, timedelta
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.worksheet.datavalidation import DataValidation
 
 def normalize_column_name(col):
     """Нормализует имя столбца или вкладки для защиты от ошибок раскладки (РУС/ENG) и пробелов"""
@@ -45,7 +46,7 @@ def safe_int(value, default=0):
     except ValueError:
         return default
 
-def process_track_data(uploaded_file, exclude_curves=False):
+def process_track_data(uploaded_file, exclude_curves=False, include_bridge_objects=True, exclude_is=False):
     try:
         xl = pd.ExcelFile(uploaded_file)
         
@@ -75,7 +76,7 @@ def process_track_data(uploaded_file, exclude_curves=False):
     if not col_kodnapr or not col_km_assess:
         raise KeyError("В листе 'Оценка КМ' не найдены обязательные столбцы КОДНАПР или КМ.")
 
-    # Добавлено: Фильтрация по списку необходимых направлений
+    # Фильтрация по списку направлений
     target_directions = [24701, 24602, 24603]
     df_assess_filtered = df_assessment[df_assessment[col_kodnapr].isin(target_directions)].copy()
     if df_assess_filtered.empty:
@@ -114,7 +115,7 @@ def process_track_data(uploaded_file, exclude_curves=False):
     col_def_lim_p = find_column(df_defects, 'СК_ОГР_ПАСС') or find_column(df_defects, 'ДОП_ПАСС')
 
     if not col_km_def or not col_degree:
-        raise KeyError("В листе 'Отступления' не найдены столбцы КМ (КМ М) или СТЕПЕНЬ.")
+        raise KeyError("В листе 'Отступления' не найдены столбцы КМ или СТЕПЕНЬ.")
 
     df_defects['MATCH_ПУТЬ'] = df_defects[col_path_def].apply(safe_int)
     df_defects['MATCH_КМ'] = df_defects[col_km_def].apply(safe_int)
@@ -124,10 +125,19 @@ def process_track_data(uploaded_file, exclude_curves=False):
         df_defects['FILTER_СТРЕЛКА'] = df_defects[col_str].apply(safe_int)
         df_defects = df_defects[df_defects['FILTER_СТРЕЛКА'] == 0]
 
-    if exclude_curves and col_defect:
-        df_defects['TMP_DEF_NAME'] = df_defects[col_defect].astype(str).str.strip().str.upper()
-        forbidden_defects = ['ПРУ', 'ДНПРОФ', 'КРИВАЯ', 'АНП']
-        df_defects = df_defects[~df_defects['TMP_DEF_NAME'].isin(forbidden_defects)]
+    # Разметка типов неисправностей для исключения/подсчета
+    if col_defect:
+        df_defects['TMP_DEF_UPPER'] = df_defects[col_defect].astype(str).str.strip().str.upper()
+        
+        # Чекбокс исключения кривых
+        if exclude_curves:
+            forbidden_defects = ['ПРУ', 'ДНПРОФ', 'КРИВАЯ', 'АНП']
+            df_defects = df_defects[~df_defects['TMP_DEF_UPPER'].isin(forbidden_defects)]
+            
+        df_defects['IS_DNPROF'] = df_defects['TMP_DEF_UPPER'] == 'ДНПРОФ'
+    else:
+        df_defects['IS_DNPROF'] = False
+        df_defects['TMP_DEF_UPPER'] = ""
 
     # --- ПРОВЕРКА ОГРАНИЧЕНИЙ ДЛЯ 2 СТЕПЕНИ (2к3ст) ---
     def check_is_2_pr(row):
@@ -153,10 +163,8 @@ def process_track_data(uploaded_file, exclude_curves=False):
 
     # --- ДОПОЛНИТЕЛЬНЫЕ ФИЛЬТРЫ ВЫБОРКИ ---
     if col_defect:
-        df_defects['TMP_DEF_UPPER'] = df_defects[col_defect].astype(str).str.strip().str.upper()
-        
-        # 1. Просадки на изолированных стыках (ПР.Л / ПР.П)
-        if col_is:
+        # 1. Просадки на ИС
+        if col_is and not exclude_is:
             df_defects['IS_PROSADKA_IS'] = (
                 df_defects['TMP_DEF_UPPER'].isin(['ПР.Л', 'ПР.П', 'ПР Л', 'ПР П']) & 
                 (df_defects['INT_СТЕПЕНЬ'] > 1) & 
@@ -165,7 +173,7 @@ def process_track_data(uploaded_file, exclude_curves=False):
         else:
             df_defects['IS_PROSADKA_IS'] = False
             
-        # 2. Уширение колеи (Уш) 1545 мм и более
+        # 2. Критическое уширение колеи от 1545 мм
         if col_ampl:
             df_defects['IS_USH_CRITICAL'] = (
                 df_defects['TMP_DEF_UPPER'].isin(['УШ', 'УШ.']) & 
@@ -173,15 +181,30 @@ def process_track_data(uploaded_file, exclude_curves=False):
             )
         else:
             df_defects['IS_USH_CRITICAL'] = False
+
+        # 3. Просадки > 20 мм на мостах или объектах
+        if include_bridge_objects and col_ampl and (col_most or col_obk):
+            is_bridge = df_defects[col_most].apply(safe_int) == 1 if col_most else False
+            is_object = df_defects[col_obk].apply(safe_int) == 1 if col_obk else False
+            
+            df_defects['IS_BRIDGE_OBJECT_CRITICAL'] = (
+                df_defects['TMP_DEF_UPPER'].isin(['ПР.Л', 'ПР.П', 'ПР Л', 'ПР П', 'П', 'П.']) &
+                (df_defects[col_ampl].apply(safe_int) > 20) &
+                (is_bridge | is_object)
+            )
+        else:
+            df_defects['IS_BRIDGE_OBJECT_CRITICAL'] = False
     else:
         df_defects['IS_PROSADKA_IS'] = False
         df_defects['IS_USH_CRITICAL'] = False
+        df_defects['IS_BRIDGE_OBJECT_CRITICAL'] = False
 
-    # Сборка всех целевых записей для включения в отчет
+    # Целевые записи для включения
     df_valid_defects = df_defects[
         df_defects['INT_СТЕПЕНЬ'].isin([2, 3, 4]) | 
         df_defects['IS_PROSADKA_IS'] | 
-        df_defects['IS_USH_CRITICAL']
+        df_defects['IS_USH_CRITICAL'] |
+        df_defects['IS_BRIDGE_OBJECT_CRITICAL']
     ].copy()
 
     def aggregate_km_defects(group):
@@ -190,18 +213,24 @@ def process_track_data(uploaded_file, exclude_curves=False):
         count_3 = group['IS_3'].sum()
         count_4 = group['IS_4'].sum()
         
-        list_desc = []
+        # Считаем количество Днпроф отдельно
+        dnprof_count = group['IS_DNPROF'].sum()
+        
+        # Исключаем Днпроф из поштучного текстового перечисления
         text_rows = group[
-            group['IS_3'] | 
-            group['IS_4'] | 
-            group['IS_2_PR'] | 
-            group['IS_PROSADKA_IS'] | 
-            group['IS_USH_CRITICAL']
+            (group['IS_3'] | 
+             group['IS_4'] | 
+             group['IS_2_PR'] | 
+             group['IS_PROSADKA_IS'] | 
+             group['IS_USH_CRITICAL'] |
+             group['IS_BRIDGE_OBJECT_CRITICAL']) & 
+            (~group['IS_DNPROF'])
         ]
         
         if col_meter and col_defect:
             text_rows = text_rows.drop_duplicates(subset=[col_meter, col_defect])
         
+        list_desc = []
         for _, row in text_rows.iterrows():
             m_val = str(safe_int(row[col_meter])) if col_meter else "0"
             def_type = str(row[col_defect]).strip() if col_defect else "ОТСТ"
@@ -222,6 +251,13 @@ def process_track_data(uploaded_file, exclude_curves=False):
             
         final_text = ", ".join(list_desc) if list_desc else ""
         
+        # Новое: Добавление агрегированного счетчика Днпроф в конец строки
+        if dnprof_count > 0:
+            if final_text:
+                final_text += f", Днпроф - {dnprof_count} шт."
+            else:
+                final_text = f"Днпроф - {dnprof_count} шт."
+        
         return pd.Series({
             'КОЛ_ВО_2': count_2,
             'КОЛ_ВО_2_3': count_2_3,
@@ -241,8 +277,11 @@ def process_track_data(uploaded_file, exclude_curves=False):
         result_df['КОЛ_ВО_4'] = 0
         result_df['ПЕРЕЧЕНЬ_ОТСТУПЛЕНИЙ'] = ""
 
+    # Замена нулей на пустоту для степеней
     for col in ['КОЛ_ВО_2', 'КОЛ_ВО_2_3', 'КОЛ_ВО_3', 'КОЛ_ВО_4']:
         result_df[col] = result_df[col].fillna(0).astype(int)
+        result_df[col] = result_df[col].apply(lambda x: "" if x == 0 else x)
+        
     result_df['ПЕРЕЧЕНЬ_ОТСТУПЛЕНИЙ'] = result_df['ПЕРЕЧЕНЬ_ОТСТУПЛЕНИЙ'].fillna("")
 
     output_data = {
@@ -252,14 +291,21 @@ def process_track_data(uploaded_file, exclude_curves=False):
         'КМ': result_df['MATCH_КМ'],
         'ОЦЕНКА': result_df[col_rating],
         'БАЛЛ': result_df[col_score_assess],
-        'КОЛ-ВО 2 СТЕПЕНЕЙ': result_df['КОЛ_ВО_2'],
-        'КОЛ-ВО 2 К 3 СТЕПЕНЕЙ': result_df['КОЛ_ВО_2_3'],
-        'КОЛ-ВО 3 СТЕПЕНЕЙ': result_df['КОЛ_ВО_3'],
-        'КОЛ-ВО 4 СТЕПЕНЕЙ': result_df['КОЛ_ВО_4'],
+        '2 ст': result_df['КОЛ_ВО_2'],
+        '2к3ст': result_df['КОЛ_ВО_2_3'],
+        '3 ст': result_df['КОЛ_ВО_3'],
+        '4 ст': result_df['КОЛ_ВО_4'],
         'ОГРАНИЧЕНИЕ СКОРОСТИ': result_df['ОГРАНИЧЕНИЕ_СКОРОСТИ'],
-        'ПЕРЕЧЕНЬ ОТСТУПЛЕНИЙ': result_df['ПЕРЕЧЕНЬ_ОТСТУПЛЕНИЙ']
+        'ПЕРЕЧЕНЬ ОТСТУПЛЕНИЙ': result_df['ПЕРЕЧЕНЬ_ОТСТУПЛЕНИЙ'],
+        'ФАКТИЧЕСКИЙ ИСПОЛНИТЕЛЬ': "" # Пустое поле под выпадающий список
     }
     final_df = pd.DataFrame(output_data)
+
+    # Динамическая генерация дат для шапки графика
+    start_date = datetime.now()
+    date_cols = [(start_date + timedelta(days=i)).strftime("%d.%m") for i in range(10)]
+    for d_col in date_cols:
+        final_df[d_col] = ""
 
     def pd_sheet_sort_key(name):
         digits = ''.join(c for c in str(name) if c.isdigit())
@@ -273,7 +319,6 @@ def process_track_data(uploaded_file, exclude_curves=False):
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         for pd_name in unique_pds_sorted:
             df_pd = final_df[final_df['ПД'] == pd_name].copy()
-            # Сортировка внутри околотка по коду направления, затем пути и километрам
             df_pd.sort_values(by=['КОДНАПР', 'ПУТЬ', 'КМ'], ascending=[True, True, True], inplace=True)
             
             sheet_title = f"ПД-{pd_name}" if not str(pd_name).startswith('ПД') else str(pd_name)
@@ -284,9 +329,6 @@ def process_track_data(uploaded_file, exclude_curves=False):
             
             worksheet.page_setup.orientation = worksheet.ORIENTATION_LANDSCAPE
             worksheet.page_setup.paperSize = worksheet.PAPERSIZE_A4
-            worksheet.sheet_properties.pageSetUpPr.fitToPage = True
-            worksheet.page_setup.fitToWidth = 1
-            worksheet.page_setup.fitToHeight = 0
             
             align_header = Alignment(horizontal='center', vertical='center', wrap_text=True)
             align_center = Alignment(horizontal='center', vertical='center')
@@ -294,70 +336,93 @@ def process_track_data(uploaded_file, exclude_curves=False):
             
             font_bold = Font(name='Arial', size=10, bold=True)
             font_normal = Font(name='Arial', size=10, bold=False)
-            
-            col_idx_rating = 5 
-            col_idx_desc = 12
+            fill_graph_header = PatternFill(start_color="E6F2FF", end_color="E6F2FF", fill_type="solid")
             
             worksheet.row_dimensions[1].height = 45
+            
+            # Настройка заголовков таблицы
             for col_idx in range(1, worksheet.max_column + 1):
                 cell = worksheet.cell(row=1, column=col_idx)
                 cell.alignment = align_header
                 cell.font = font_bold
+                if col_idx > 13:  # Подсветка шапки календаря-графика
+                    cell.fill = fill_graph_header
             
+            # Оформление строк данных
             for row_idx in range(2, worksheet.max_row + 1):
-                rating_value = str(worksheet.cell(row=row_idx, column=col_idx_rating).value).strip()
+                rating_value = str(worksheet.cell(row=row_idx, column=5).value).strip()
                 is_rating_2 = (rating_value == '2' or rating_value == '2.0')
                 
                 for col_idx in range(1, worksheet.max_column + 1):
                     cell = worksheet.cell(row=row_idx, column=col_idx)
                     
-                    if col_idx == col_idx_desc:
+                    if col_idx == 12 or col_idx == 13: # Перечень и Исполнитель
                         cell.alignment = align_left
                     else:
                         cell.alignment = align_center
                         
-                    if is_rating_2:
-                        cell.font = font_bold
-                    else:
-                        cell.font = font_normal
+                    cell.font = font_bold if is_rating_2 else font_normal
 
+            # Автоматическая ширина столбцов путевой части
             for col in worksheet.columns:
                 col_letter = col[0].column_letter
-                max_data_len = 0
-                for cell in col[1:]: 
-                    if cell.value is not None:
-                        max_data_len = max(max_data_len, len(str(cell.value)))
+                col_idx = col[0].column
                 
-                if col_letter in ['A', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K']:
-                    worksheet.column_dimensions[col_letter].width = 11
-                elif col_letter == 'B':
-                    worksheet.column_dimensions[col_letter].width = 8
-                else:
-                    worksheet.column_dimensions[col_letter].width = max(max_data_len + 3, 25)
+                if col_idx <= 11:
+                    worksheet.column_dimensions[col_letter].width = 10
+                elif col_idx == 12: # Перечень отступлений
+                    worksheet.column_dimensions[col_letter].width = 45
+                elif col_idx == 13: # Фактический ответственный
+                    worksheet.column_dimensions[col_letter].width = 24
+                else: # Столбцы дат графика
+                    worksheet.column_dimensions[col_letter].width = 7
+
+            # Добавление выпадающего списка в столбец М (Фактический исполнитель)
+            dv = DataValidation(
+                type="list", 
+                formula1='"ПД-1,ПД-2,ПД-3,ПД-4,ПМС,Мостовики,Спец.бригада"', 
+                allow_blank=True
+            )
+            dv.error = 'Выберите значение из списка'
+            dv.errorTitle = 'Ошибочный ввод'
+            dv.prompt = 'Укажите ответственного за устранение'
+            dv.promptTitle = 'Исполнитель'
+            
+            worksheet.add_data_validation(dv)
+            dv.add(f"M2:M{worksheet.max_row}")
                     
     processed_data = output.getvalue()
     return processed_data
 
 # --- Веб-Интерфейс Streamlit ---
-st.title("📋 Аналитика путеизмерителя: План устранения отступлений")
-st.subheader("Автоматическое разделение по околоткам (ПД)")
+st.title("📋 Аналитика путеизмерителя: План-График устранения")
+st.subheader("Автоматическое разделение по околоткам с календарной сеткой")
 
 uploaded_file = st.file_uploader("Выберите исходный Excel-файл с вагона", type=["xlsx", "xls"])
-exclude_curves = st.checkbox("Исключить оценку кривых (ПрУ, ДНпроф, Кривая, Анп)")
+
+st.markdown("### Настройки фильтрации анализа:")
+exclude_curves = st.checkbox("Исключить детальную оценку кривых (ПрУ, ДНпроф, Кривая, Анп)", value=False)
+include_bridge_objects = st.checkbox("Включить выборку просадок > 20 мм на МОСТАХ и ОБЪЕКТАХ (МОСТ=1 / ОБК=1)", value=True)
+exclude_is = st.checkbox("Исключить просадки на изолированных стыках (ИС)", value=False)
 
 if uploaded_file is not None:
-    if st.button("Сформировать и рассчитать план", type="primary"):
-        with st.spinner("⏳ Выполняются вычисления... Пожалуйста, подождите."):
+    if st.button("Сформировать План-График", type="primary"):
+        with st.spinner("⏳ Идет обработка вагонных данных... Пожалуйста, подождите."):
             try:
-                excel_data = process_track_data(uploaded_file, exclude_curves=exclude_curves)
+                excel_data = process_track_data(
+                    uploaded_file, 
+                    exclude_curves=exclude_curves, 
+                    include_bridge_objects=include_bridge_objects,
+                    exclude_is=exclude_is
+                )
                 
                 current_time = datetime.now().strftime("%d-%m-%Y_%H-%M")
-                file_title = f"Plan_ustr_otst_multi_{current_time}.xlsx"
+                file_title = f"Plan_Grafik_multi_{current_time}.xlsx"
                 
-                st.success("✅ Расчет успешно завершен!")
+                st.success("✅ План-График успешно сформирован!")
                 
                 st.download_button(
-                    label="📥 Скачать готовый план (Excel)",
+                    label="📥 Скачать План-График (Excel)",
                     data=excel_data,
                     file_name=file_title,
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
