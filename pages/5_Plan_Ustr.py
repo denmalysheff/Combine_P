@@ -75,9 +75,11 @@ def process_track_data(uploaded_file, exclude_curves=False):
     if not col_kodnapr or not col_km_assess:
         raise KeyError("В листе 'Оценка КМ' не найдены обязательные столбцы КОДНАПР или КМ.")
 
-    df_assess_filtered = df_assessment[df_assessment[col_kodnapr] == 24701].copy()
+    # Добавлено: Фильтрация по списку необходимых направлений
+    target_directions = [24701, 24602, 24603]
+    df_assess_filtered = df_assessment[df_assessment[col_kodnapr].isin(target_directions)].copy()
     if df_assess_filtered.empty:
-        raise ValueError("В листе 'Оценка КМ' не найдено записей с КОДНАПР == 24701")
+        raise ValueError("В листе 'Оценка КМ' не найдено записей для направлений 24701, 24602, 24603")
 
     df_assess_filtered['MATCH_ПУТЬ'] = df_assess_filtered[col_path_assess].apply(safe_int)
     df_assess_filtered['MATCH_КМ'] = df_assess_filtered[col_km_assess].apply(safe_int)
@@ -110,7 +112,6 @@ def process_track_data(uploaded_file, exclude_curves=False):
     col_score_def = find_column(df_defects, 'БАЛЛ')
     
     col_def_lim_p = find_column(df_defects, 'СК_ОГР_ПАСС') or find_column(df_defects, 'ДОП_ПАСС')
-    col_def_lim_g = find_column(df_defects, 'СК_ОГР_ГРУЗ') or find_column(df_defects, 'ДОП_ГРУЗ')
 
     if not col_km_def or not col_degree:
         raise KeyError("В листе 'Отступления' не найдены столбцы КМ (КМ М) или СТЕПЕНЬ.")
@@ -128,7 +129,7 @@ def process_track_data(uploaded_file, exclude_curves=False):
         forbidden_defects = ['ПРУ', 'ДНПРОФ', 'КРИВАЯ', 'АНП']
         df_defects = df_defects[~df_defects['TMP_DEF_NAME'].isin(forbidden_defects)]
 
-    # --- УЛУЧШЕННАЯ ПРОВЕРКА ОГРАНИЧЕНИЙ ДЛЯ 2 СТЕПЕНИ (2к3ст) ---
+    # --- ПРОВЕРКА ОГРАНИЧЕНИЙ ДЛЯ 2 СТЕПЕНИ (2к3ст) ---
     def check_is_2_pr(row):
         if safe_int(row['INT_СТЕПЕНЬ']) != 2:
             return False
@@ -150,11 +151,11 @@ def process_track_data(uploaded_file, exclude_curves=False):
     df_defects['IS_3'] = df_defects['INT_СТЕПЕНЬ'] == 3
     df_defects['IS_4'] = df_defects['INT_СТЕПЕНЬ'] == 4
 
-    # --- НОВЫЕ ДОПОЛНИТЕЛЬНЫЕ ФИЛЬТРЫ ВЫБОРКИ ---
+    # --- ДОПОЛНИТЕЛЬНЫЕ ФИЛЬТРЫ ВЫБОРКИ ---
     if col_defect:
         df_defects['TMP_DEF_UPPER'] = df_defects[col_defect].astype(str).str.strip().str.upper()
         
-        # 1. Просадки на изолированных стыках
+        # 1. Просадки на изолированных стыках (ПР.Л / ПР.П)
         if col_is:
             df_defects['IS_PROSADKA_IS'] = (
                 df_defects['TMP_DEF_UPPER'].isin(['ПР.Л', 'ПР.П', 'ПР Л', 'ПР П']) & 
@@ -190,7 +191,6 @@ def process_track_data(uploaded_file, exclude_curves=False):
         count_4 = group['IS_4'].sum()
         
         list_desc = []
-        # Выбираем строки, которые пойдут в текстовое описание километра
         text_rows = group[
             group['IS_3'] | 
             group['IS_4'] | 
@@ -273,7 +273,8 @@ def process_track_data(uploaded_file, exclude_curves=False):
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         for pd_name in unique_pds_sorted:
             df_pd = final_df[final_df['ПД'] == pd_name].copy()
-            df_pd.sort_values(by=['ПУТЬ', 'КМ'], ascending=[True, True], inplace=True)
+            # Сортировка внутри околотка по коду направления, затем пути и километрам
+            df_pd.sort_values(by=['КОДНАПР', 'ПУТЬ', 'КМ'], ascending=[True, True, True], inplace=True)
             
             sheet_title = f"ПД-{pd_name}" if not str(pd_name).startswith('ПД') else str(pd_name)
             df_pd.to_excel(writer, sheet_name=sheet_title, index=False)
@@ -351,7 +352,7 @@ if uploaded_file is not None:
                 excel_data = process_track_data(uploaded_file, exclude_curves=exclude_curves)
                 
                 current_time = datetime.now().strftime("%d-%m-%Y_%H-%M")
-                file_title = f"Plan_ustr_otst_24701_{current_time}.xlsx"
+                file_title = f"Plan_ustr_otst_multi_{current_time}.xlsx"
                 
                 st.success("✅ Расчет успешно завершен!")
                 
