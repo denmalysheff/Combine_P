@@ -46,7 +46,8 @@ def safe_int(value, default=0):
     except ValueError:
         return default
 
-def process_track_data(uploaded_file, exclude_curves=False, include_bridge_objects=True, exclude_is=False):
+def process_track_data(uploaded_file, include_bridge_objects=True, exclude_is=False,
+                       inc_dnprof=False, inc_pru=False, inc_anp=False, inc_zaz=False, inc_rshk=False):
     try:
         xl = pd.ExcelFile(uploaded_file)
         
@@ -76,7 +77,7 @@ def process_track_data(uploaded_file, exclude_curves=False, include_bridge_objec
     if not col_kodnapr or not col_km_assess:
         raise KeyError("В листе 'Оценка КМ' не найдены обязательные столбцы КОДНАПР или КМ.")
 
-    # Фильтрация по списку направлений
+    # Фильтрация по списку направлений ПЧ-22
     target_directions = [24701, 24602, 24603]
     df_assess_filtered = df_assessment[df_assessment[col_kodnapr].isin(target_directions)].copy()
     if df_assess_filtered.empty:
@@ -88,10 +89,8 @@ def process_track_data(uploaded_file, exclude_curves=False, include_bridge_objec
     def make_speed_limit(row):
         p = str(row[col_lim_pass]).split('.')[0].strip() if col_lim_pass and pd.notna(row[col_lim_pass]) else "-"
         g = str(row[col_lim_gruz]).split('.')[0].strip() if col_lim_gruz and pd.notna(row[col_lim_gruz]) else "-"
-        
         if p in ['', 'nan', '-']: p = "-"
         if g in ['', 'nan', '-']: g = "-"
-        
         if p == "-" and g == "-": return ""
         return f"{p}/{g}"
 
@@ -111,7 +110,6 @@ def process_track_data(uploaded_file, exclude_curves=False, include_bridge_objec
     col_most = find_column(df_defects, 'МОСТ')
     col_pr = find_column(df_defects, 'PR_PREDUPR')
     col_score_def = find_column(df_defects, 'БАЛЛ')
-    
     col_def_lim_p = find_column(df_defects, 'СК_ОГР_ПАСС') or find_column(df_defects, 'ДОП_ПАСС')
 
     if not col_km_def or not col_degree:
@@ -125,41 +123,56 @@ def process_track_data(uploaded_file, exclude_curves=False, include_bridge_objec
         df_defects['FILTER_СТРЕЛКА'] = df_defects[col_str].apply(safe_int)
         df_defects = df_defects[df_defects['FILTER_СТРЕЛКА'] == 0]
 
-    # Разметка типов неисправностей для исключения/подсчета
+    # Маркировка типов неисправностей для фильтрации и штучного подсчета
     if col_defect:
         df_defects['TMP_DEF_UPPER'] = df_defects[col_defect].astype(str).str.strip().str.upper()
-        
-        # Чекбокс исключения кривых
-        if exclude_curves:
-            forbidden_defects = ['ПРУ', 'ДНПРОФ', 'КРИВАЯ', 'АНП']
-            df_defects = df_defects[~df_defects['TMP_DEF_UPPER'].isin(forbidden_defects)]
-            
-        df_defects['IS_DNPROF'] = df_defects['TMP_DEF_UPPER'] == 'ДНПРОФ'
     else:
-        df_defects['IS_DNPROF'] = False
         df_defects['TMP_DEF_UPPER'] = ""
+
+    df_defects['IS_DNPROF_VAL'] = df_defects['TMP_DEF_UPPER'] == 'ДНПРОФ'
+    df_defects['IS_PRU_VAL'] = df_defects['TMP_DEF_UPPER'] == 'ПРУ'
+    df_defects['IS_ANP_VAL'] = df_defects['TMP_DEF_UPPER'] == 'АНП'
+    df_defects['IS_ZAZ_VAL'] = df_defects['TMP_DEF_UPPER'] == 'ЗАЗ'
+    df_defects['IS_RSHK_VAL'] = df_defects['TMP_DEF_UPPER'] == 'РШК'
+
+    # Переменная-флаг: является ли запись техническим/доп. параметром
+    df_defects['IS_SPECIAL_PARAM'] = (
+        df_defects['IS_DNPROF_VAL'] | df_defects['IS_PRU_VAL'] | 
+        df_defects['IS_ANP_VAL'] | df_defects['IS_ZAZ_VAL'] | df_defects['IS_RSHK_VAL']
+    )
+
+    # Фильтр по чекбоксам: оставляем только то, что пользователь ВКЛЮЧИЛ
+    def keep_by_checkbox(row):
+        if not row['IS_SPECIAL_PARAM']:
+            return True # Обычные дефекты оставляем всегда
+        if row['IS_DNPROF_VAL'] and inc_dnprof: return True
+        if row['IS_PRU_VAL'] and inc_pru: return True
+        if row['IS_ANP_VAL'] and inc_anp: return True
+        if row['IS_ZAZ_VAL'] and inc_zaz: return True
+        if row['IS_RSHK_VAL'] and inc_rshk: return True
+        return False
+
+    df_defects = df_defects[df_defects.apply(keep_by_checkbox, axis=1)].copy()
 
     # --- ПРОВЕРКА ОГРАНИЧЕНИЙ ДЛЯ 2 СТЕПЕНИ (2к3ст) ---
     def check_is_2_pr(row):
-        if safe_int(row['INT_СТЕПЕНЬ']) != 2:
-            return False
+        if row['IS_SPECIAL_PARAM']: return False # Не ведем счет степеней для доп параметров
+        if safe_int(row['INT_СТЕПЕНЬ']) != 2: return False
         if col_pr:
             pr_val = str(row[col_pr]).strip().upper()
-            if pr_val not in ['0', '0.0', '', 'NAN', 'NONE', '-']:
-                return True
+            if pr_val not in ['0', '0.0', '', 'NAN', 'NONE', '-']: return True
         if col_def_lim_p and pd.notna(row[col_def_lim_p]):
             try:
                 spd_p = float(row[col_def_lim_p])
-                if 0 < spd_p < 140:
-                    return True
-            except ValueError:
-                pass
+                if 0 < spd_p < 140: return True
+            except ValueError: pass
         return False
 
+    # Расчет степеней только для классических неисправностей путевой геометрии
     df_defects['IS_2_PR'] = df_defects.apply(check_is_2_pr, axis=1)
-    df_defects['IS_2_REGULAR'] = (df_defects['INT_СТЕПЕНЬ'] == 2) & (~df_defects['IS_2_PR'])
-    df_defects['IS_3'] = df_defects['INT_СТЕПЕНЬ'] == 3
-    df_defects['IS_4'] = df_defects['INT_СТЕПЕНЬ'] == 4
+    df_defects['IS_2_REGULAR'] = (df_defects['INT_СТЕПЕНЬ'] == 2) & (~df_defects['IS_2_PR']) & (~df_defects['IS_SPECIAL_PARAM'])
+    df_defects['IS_3'] = (df_defects['INT_СТЕПЕНЬ'] == 3) & (~df_defects['IS_SPECIAL_PARAM'])
+    df_defects['IS_4'] = (df_defects['INT_СТЕПЕНЬ'] == 4) & (~df_defects['IS_SPECIAL_PARAM'])
 
     # --- ДОПОЛНИТЕЛЬНЫЕ ФИЛЬТРЫ ВЫБОРКИ ---
     if col_defect:
@@ -186,11 +199,9 @@ def process_track_data(uploaded_file, exclude_curves=False, include_bridge_objec
         if include_bridge_objects and col_ampl and (col_most or col_obk):
             is_bridge = df_defects[col_most].apply(safe_int) == 1 if col_most else False
             is_object = df_defects[col_obk].apply(safe_int) == 1 if col_obk else False
-            
             df_defects['IS_BRIDGE_OBJECT_CRITICAL'] = (
                 df_defects['TMP_DEF_UPPER'].isin(['ПР.Л', 'ПР.П', 'ПР Л', 'ПР П', 'П', 'П.']) &
-                (df_defects[col_ampl].apply(safe_int) > 20) &
-                (is_bridge | is_object)
+                (df_defects[col_ampl].apply(safe_int) > 20) & (is_bridge | is_object)
             )
         else:
             df_defects['IS_BRIDGE_OBJECT_CRITICAL'] = False
@@ -199,12 +210,13 @@ def process_track_data(uploaded_file, exclude_curves=False, include_bridge_objec
         df_defects['IS_USH_CRITICAL'] = False
         df_defects['IS_BRIDGE_OBJECT_CRITICAL'] = False
 
-    # Целевые записи для включения
+    # Сборка валидных записей
     df_valid_defects = df_defects[
         df_defects['INT_СТЕПЕНЬ'].isin([2, 3, 4]) | 
         df_defects['IS_PROSADKA_IS'] | 
         df_defects['IS_USH_CRITICAL'] |
-        df_defects['IS_BRIDGE_OBJECT_CRITICAL']
+        df_defects['IS_BRIDGE_OBJECT_CRITICAL'] |
+        df_defects['IS_SPECIAL_PARAM']
     ].copy()
 
     def aggregate_km_defects(group):
@@ -213,18 +225,18 @@ def process_track_data(uploaded_file, exclude_curves=False, include_bridge_objec
         count_3 = group['IS_3'].sum()
         count_4 = group['IS_4'].sum()
         
-        # Считаем количество Днпроф отдельно
-        dnprof_count = group['IS_DNPROF'].sum()
+        # Подсчет количества спец. параметров на километре
+        dnprof_c = group['IS_DNPROF_VAL'].sum()
+        pru_c = group['IS_PRU_VAL'].sum()
+        anp_c = group['IS_ANP_VAL'].sum()
+        zaz_c = group['IS_ZAZ_VAL'].sum()
+        rshk_c = group['IS_RSHK_VAL'].sum()
         
-        # Исключаем Днпроф из поштучного текстового перечисления
+        # Выделяем обычные дефекты для поштучного вывода в текст
         text_rows = group[
-            (group['IS_3'] | 
-             group['IS_4'] | 
-             group['IS_2_PR'] | 
-             group['IS_PROSADKA_IS'] | 
-             group['IS_USH_CRITICAL'] |
-             group['IS_BRIDGE_OBJECT_CRITICAL']) & 
-            (~group['IS_DNPROF'])
+            (group['IS_3'] | group['IS_4'] | group['IS_2_PR'] | 
+             group['IS_PROSADKA_IS'] | group['IS_USH_CRITICAL'] | group['IS_BRIDGE_OBJECT_CRITICAL']) & 
+            (~group['IS_SPECIAL_PARAM'])
         ]
         
         if col_meter and col_defect:
@@ -234,7 +246,6 @@ def process_track_data(uploaded_file, exclude_curves=False, include_bridge_objec
         for _, row in text_rows.iterrows():
             m_val = str(safe_int(row[col_meter])) if col_meter else "0"
             def_type = str(row[col_defect]).strip() if col_defect else "ОТСТ"
-            
             deg_str = "2к3ст" if row['IS_2_PR'] else f"{safe_int(row['INT_СТЕПЕНЬ'])}ст"
             ampl = str(safe_int(row[col_ampl])) if col_ampl else "0"
             length = str(safe_int(row[col_len])) if col_len else "0"
@@ -251,12 +262,20 @@ def process_track_data(uploaded_file, exclude_curves=False, include_bridge_objec
             
         final_text = ", ".join(list_desc) if list_desc else ""
         
-        # Новое: Добавление агрегированного счетчика Днпроф в конец строки
-        if dnprof_count > 0:
+        # Сборка агрегированных счетчиков в конец текстового описания километра
+        counts_list = []
+        if dnprof_c > 0: counts_list.append(f"Днпроф - {dnprof_c} шт.")
+        if pru_c > 0: counts_list.append(f"ПрУ - {pru_c} шт.")
+        if anp_c > 0: counts_list.append(f"Анп - {anp_c} шт.")
+        if zaz_c > 0: counts_list.append(f"Заз - {zaz_c} шт.")
+        if rshk_c > 0: counts_list.append(f"РШК - {rshk_c} шт.")
+        
+        if counts_list:
+            counts_str = ", ".join(counts_list)
             if final_text:
-                final_text += f", Днпроф - {dnprof_count} шт."
+                final_text += f", {counts_str}"
             else:
-                final_text = f"Днпроф - {dnprof_count} шт."
+                final_text = counts_str
         
         return pd.Series({
             'КОЛ_ВО_2': count_2,
@@ -277,7 +296,7 @@ def process_track_data(uploaded_file, exclude_curves=False, include_bridge_objec
         result_df['КОЛ_ВО_4'] = 0
         result_df['ПЕРЕЧЕНЬ_ОТСТУПЛЕНИЙ'] = ""
 
-    # Замена нулей на пустоту для степеней
+    # Сокрытие нулей в столбцах степеней
     for col in ['КОЛ_ВО_2', 'КОЛ_ВО_2_3', 'КОЛ_ВО_3', 'КОЛ_ВО_4']:
         result_df[col] = result_df[col].fillna(0).astype(int)
         result_df[col] = result_df[col].apply(lambda x: "" if x == 0 else x)
@@ -297,11 +316,11 @@ def process_track_data(uploaded_file, exclude_curves=False, include_bridge_objec
         '4 ст': result_df['КОЛ_ВО_4'],
         'ОГРАНИЧЕНИЕ СКОРОСТИ': result_df['ОГРАНИЧЕНИЕ_СКОРОСТИ'],
         'ПЕРЕЧЕНЬ ОТСТУПЛЕНИЙ': result_df['ПЕРЕЧЕНЬ_ОТСТУПЛЕНИЙ'],
-        'ФАКТИЧЕСКИЙ ИСПОЛНИТЕЛЬ': "" # Пустое поле под выпадающий список
+        'ФАКТИЧЕСКИЙ ИСПОЛНИТЕЛЬ': ""
     }
     final_df = pd.DataFrame(output_data)
 
-    # Динамическая генерация дат для шапки графика
+    # Календарная сетка на 10 дней
     start_date = datetime.now()
     date_cols = [(start_date + timedelta(days=i)).strftime("%d.%m") for i in range(10)]
     for d_col in date_cols:
@@ -326,7 +345,6 @@ def process_track_data(uploaded_file, exclude_curves=False, include_bridge_objec
             
             workbook = writer.book
             worksheet = workbook[sheet_title]
-            
             worksheet.page_setup.orientation = worksheet.ORIENTATION_LANDSCAPE
             worksheet.page_setup.paperSize = worksheet.PAPERSIZE_A4
             
@@ -339,50 +357,42 @@ def process_track_data(uploaded_file, exclude_curves=False, include_bridge_objec
             fill_graph_header = PatternFill(start_color="E6F2FF", end_color="E6F2FF", fill_type="solid")
             
             worksheet.row_dimensions[1].height = 45
-            
-            # Настройка заголовков таблицы
             for col_idx in range(1, worksheet.max_column + 1):
                 cell = worksheet.cell(row=1, column=col_idx)
                 cell.alignment = align_header
                 cell.font = font_bold
-                if col_idx > 13:  # Подсветка шапки календаря-графика
+                if col_idx > 13:
                     cell.fill = fill_graph_header
             
-            # Оформление строк данных
             for row_idx in range(2, worksheet.max_row + 1):
                 rating_value = str(worksheet.cell(row=row_idx, column=5).value).strip()
                 is_rating_2 = (rating_value == '2' or rating_value == '2.0')
                 
                 for col_idx in range(1, worksheet.max_column + 1):
                     cell = worksheet.cell(row=row_idx, column=col_idx)
-                    
-                    if col_idx == 12 or col_idx == 13: # Перечень и Исполнитель
+                    if col_idx == 12 or col_idx == 13:
                         cell.alignment = align_left
                     else:
                         cell.alignment = align_center
-                        
                     cell.font = font_bold if is_rating_2 else font_normal
 
-            # Автоматическая ширина столбцов путевой части
             for col in worksheet.columns:
                 col_letter = col[0].column_letter
                 col_idx = col[0].column
-                
                 if col_idx <= 11:
                     worksheet.column_dimensions[col_letter].width = 10
-                elif col_idx == 12: # Перечень отступлений
-                    worksheet.column_dimensions[col_letter].width = 45
-                elif col_idx == 13: # Фактический ответственный
+                elif col_idx == 12:
+                    worksheet.column_dimensions[col_letter].width = 50
+                elif col_idx == 13:
                     worksheet.column_dimensions[col_letter].width = 24
-                else: # Столбцы дат графика
+                else:
                     worksheet.column_dimensions[col_letter].width = 7
 
-            # Добавление выпадающего списка в столбец М (Фактический исполнитель)
-            dv = DataValidation(
-                type="list", 
-                formula1='"ПД-1,ПД-2,ПД-3,ПД-4,ПМС,Мостовики,Спец.бригада"', 
-                allow_blank=True
-            )
+            # Выпадающий список исполнителей (ПД-1...ПД-15, ППР-3, ППР-5)
+            pds_list = ",".join([f"ПД-{i}" for i in range(1, 16)])
+            executors_formula = f'"{pds_list},ППР-3,ППР-5,ПМС,Мостовики"'
+            
+            dv = DataValidation(type="list", formula1=executors_formula, allow_blank=True)
             dv.error = 'Выберите значение из списка'
             dv.errorTitle = 'Ошибочный ввод'
             dv.prompt = 'Укажите ответственного за устранение'
@@ -395,37 +405,56 @@ def process_track_data(uploaded_file, exclude_curves=False, include_bridge_objec
     return processed_data
 
 # --- Веб-Интерфейс Streamlit ---
-st.title("📋 Аналитика путеизмерителя: План-График устранения")
-st.subheader("Автоматическое разделение по околоткам с календарной сеткой")
+st.set_page_config(page_title="ЧП-22 Планирование", layout="wide")
+st.title("🚂 ЧП-22 Планирование")
+st.subheader("Аналитика вагонных данных и автоматическое распределение План-Графика")
 
 uploaded_file = st.file_uploader("Выберите исходный Excel-файл с вагона", type=["xlsx", "xls"])
 
-st.markdown("### Настройки фильтрации анализа:")
-exclude_curves = st.checkbox("Исключить детальную оценку кривых (ПрУ, ДНпроф, Кривая, Анп)", value=False)
-include_bridge_objects = st.checkbox("Включить выборку просадок > 20 мм на МОСТАХ и ОБЪЕКТАХ (МОСТ=1 / ОБК=1)", value=True)
-exclude_is = st.checkbox("Исключить просадки на изолированных стыках (ИС)", value=False)
+st.markdown("### 🛠️ Настройки включаемых в анализ параметров путеизмерителя:")
+col1, col2 = st.columns(2)
+
+with col1:
+    include_bridge_objects = st.checkbox("Включить выборку просадок > 20 мм на МОСТАХ и ОБЪЕКТАХ (МОСТ=1 / ОБК=1)", value=True)
+    exclude_is = st.checkbox("Исключить просадки на изолированных стыках (ИС)", value=False)
+    st.write("")
+    st.markdown("**Дополнительные параметры (выводятся общим количеством):**")
+    inc_dnprof = st.checkbox("Включить продольный профиль (ДНПРОФ)", value=False)
+    inc_pru = st.checkbox("Включить просадку уровня на сопряжении (ПРУ)", value=False)
+
+with col2:
+    st.write("")
+    st.write("")
+    st.write("")
+    inc_anp = st.checkbox("Включить уклон отвода возвышения (АНП)", value=False)
+    inc_zaz = st.checkbox("Включить стыковые зазоры (ЗАЗ)", value=False)
+    inc_rshk = st.checkbox("Включить регулировку ширины колеи (РШК)", value=False)
 
 if uploaded_file is not None:
-    if st.button("Сформировать План-График", type="primary"):
-        with st.spinner("⏳ Идет обработка вагонных данных... Пожалуйста, подождите."):
+    if st.button("Сформировать План-График ЧП-22", type="primary"):
+        with st.spinner("⏳ Выполняется расчет и компоновка околотков... Пожалуйста, подождите."):
             try:
                 excel_data = process_track_data(
                     uploaded_file, 
-                    exclude_curves=exclude_curves, 
                     include_bridge_objects=include_bridge_objects,
-                    exclude_is=exclude_is
+                    exclude_is=exclude_is,
+                    inc_dnprof=inc_dnprof,
+                    inc_pru=inc_pru,
+                    inc_anp=inc_anp,
+                    inc_zaz=inc_zaz,
+                    inc_rshk=inc_rshk
                 )
                 
                 current_time = datetime.now().strftime("%d-%m-%Y_%H-%M")
-                file_title = f"Plan_Grafik_multi_{current_time}.xlsx"
+                file_title = f"PCH22_Plan_Grafik_{current_time}.xlsx"
                 
                 st.success("✅ План-График успешно сформирован!")
                 
                 st.download_button(
-                    label="📥 Скачать План-График (Excel)",
+                    label="📥 Скачать готовый План-График (Excel)",
                     data=excel_data,
                     file_name=file_title,
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
             except Exception as e:
-                st.error(f"❌ Ошибка при распознавании данных: {str(e)}")
+                st.error(f"❌ Ошибка при обработке данных: {str(e)}")
