@@ -424,23 +424,23 @@ def process_track_data(uploaded_file, inc_bridge_objects=False, inc_is=False,
 # --- Веб-Интерфейс Streamlit ---
 st.set_page_config(page_title="ЧП-22 Планирование", layout="wide")
 st.title("🚂 ЧП-22 Планирование")
-st.subheader("Аналитика вагонных данных и автоматическое распределение План-Графика")
+st.subheader("Формирование плана устранения отступлений")
 
-uploaded_file = st.file_uploader("Выберите исходный Excel-файл с вагона", type=["xlsx", "xls"])
+uploaded_file = st.file_uploader("Выберите исходный Excel-файл КВЛ-П", type=["xlsx", "xls"])
 
 st.markdown("### 🛠️ Настройки включаемых в анализ параметров путеизмерителя (по умолчанию отключены):")
 col1, col2 = st.columns(2)
 
 with col1:
-    inc_bridge_objects = st.checkbox("Включить выборку просадок > 20 мм на МОСТАХ и ОБЪЕКТАХ (МОСТ=1 / ОБК=1)", value=False)
-    inc_is = st.checkbox("Включить просадки на изолированных стыках (ИС)", value=False)
-    inc_dnprof = st.checkbox("Включить продольный профиль (ДНПРОФ)", value=False)
-    inc_pru = st.checkbox("Включить просадку уровня на сопряжении (ПРУ)", value=False)
+    inc_bridge_objects = st.checkbox("Включить выборку просадок > 20 мм на МОСТАХ или в Обкатке (МОСТ=1 / ОБК=1)", value=False)
+    inc_is = st.checkbox("Включить просадки на изолирующих стыках (ИС)", value=False)
+    inc_dnprof = st.checkbox("Включить длинные профильные неровности (ДНПРОФ)", value=False)
+    inc_pru = st.checkbox("Включить отклонения от уровня в кривых (ПРУ)", value=False)
 
 with col2:
-    inc_anp = st.checkbox("Включить уклон отвода возвышения (АНП)", value=False)
+    inc_anp = st.checkbox("Включить непогашенное ускорение (АНП)", value=False)
     inc_zaz = st.checkbox("Включить стыковые зазоры (ЗАЗ)", value=False)
-    inc_rshk = st.checkbox("Включить регулировку ширины колеи (РШК)", value=False)
+    inc_rshk = st.checkbox("Включить разность ширины колеи (РШК)", value=False)
 
 if uploaded_file is not None:
     if st.button("Сформировать План-График ЧП-22", type="primary"):
