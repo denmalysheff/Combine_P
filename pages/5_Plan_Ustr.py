@@ -3,6 +3,7 @@ import streamlit as st
 import io
 from datetime import datetime, timedelta
 from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter  # Исправление ошибки с MergedCell
 
 def normalize_column_name(col):
     """Нормализует имя столбца или вкладки для защиты от ошибок раскладки (РУС/ENG) и пробелов"""
@@ -334,13 +335,13 @@ def process_track_data(uploaded_file, inc_bridge_objects=False, inc_is=False,
             
             sheet_title = f"ПД-{pd_name}" if not str(pd_name).startswith('ПД') else str(pd_name)
             
-            # Сдвигаем таблицу вниз на 3 строки для создания крупной шапки
+            # Таблица пишется со строки 4 (индекс 3) для сохранения места под шапку листа
             df_pd.to_excel(writer, sheet_name=sheet_title, index=False, startrow=3)
             
             workbook = writer.book
             worksheet = workbook[sheet_title]
             
-            # Настройка параметров печати под широкий формат (А3 / А4 Альбомная)
+            # Ориентация под широкий лист А3
             worksheet.page_setup.orientation = worksheet.ORIENTATION_LANDSCAPE
             worksheet.page_setup.paperSize = worksheet.PAPERSIZE_A3
             
@@ -353,17 +354,16 @@ def process_track_data(uploaded_file, inc_bridge_objects=False, inc_is=False,
             font_normal = Font(name='Arial', size=11, bold=False)
             fill_graph_header = PatternFill(start_color="F2F7FA", end_color="F2F7FA", fill_type="solid")
             
-            # 1. Создание крупного текстового заголовка вкладки
+            # Объединение и создание заголовка листа (строки 1-2)
             worksheet.merge_cells(start_row=1, start_column=1, end_row=2, end_column=worksheet.max_column)
             title_cell = worksheet.cell(row=1, column=1)
             title_cell.value = f"ПЛАН УСТРАНЕНИЯ ОТСТУПЛЕНИЙ {sheet_title.upper()}"
             title_cell.font = font_title
             title_cell.alignment = align_center
             
-            # Настройка высоты строк
-            worksheet.row_dimensions[4].height = 40 # Строка заголовков таблицы
+            worksheet.row_dimensions[4].height = 40  # Высота шапки таблицы
             
-            # Оформление шапки таблицы
+            # Оформление заголовков таблицы (строка 4)
             for col_idx in range(1, worksheet.max_column + 1):
                 cell = worksheet.cell(row=4, column=col_idx)
                 cell.alignment = align_header
@@ -371,9 +371,9 @@ def process_track_data(uploaded_file, inc_bridge_objects=False, inc_is=False,
                 if col_idx > 13:
                     cell.fill = fill_graph_header
             
-            # Оформление строк с данными
+            # Оформление строк данных (начиная со строки 5)
             for row_idx in range(5, worksheet.max_row + 1):
-                worksheet.row_dimensions[row_idx].height = 24 # Увеличенная высота под А3
+                worksheet.row_dimensions[row_idx].height = 24  # Комфортная высота строк для А3
                 rating_value = str(worksheet.cell(row=row_idx, column=5).value).strip()
                 is_rating_2 = (rating_value == '2' or rating_value == '2.0')
                 
@@ -385,21 +385,21 @@ def process_track_data(uploaded_file, inc_bridge_objects=False, inc_is=False,
                         cell.alignment = align_center
                     cell.font = font_bold if is_rating_2 else font_normal
 
-            # Оптимальная ширина ячеек для полной читаемости на печати
-            for col in worksheet.columns:
-                col_letter = col[0].column_letter
-                col_idx = col[0].column
+            # Безопасная настройка ширины столбцов по индексам (обход MergedCell)
+            for col_idx in range(1, worksheet.max_column + 1):
+                col_letter = get_column_letter(col_idx)
+                
                 if col_idx in [1, 2, 5, 6]:
                     worksheet.column_dimensions[col_letter].width = 13
                 elif col_idx in [3, 4, 7, 8, 9, 10]:
                     worksheet.column_dimensions[col_letter].width = 10
-                elif col_idx == 11: # Ограничение скорости
+                elif col_idx == 11:  # Ограничение скорости
                     worksheet.column_dimensions[col_letter].width = 15
-                elif col_idx == 12: # Перечень отступлений (делаем широким под А3)
+                elif col_idx == 12:  # Перечень отступлений
                     worksheet.column_dimensions[col_letter].width = 65
-                elif col_idx == 13: # Фактический исполнитель
+                elif col_idx == 13:  # Фактический исполнитель
                     worksheet.column_dimensions[col_letter].width = 28
-                else: # Даты
+                else:  # Календарные даты графика
                     worksheet.column_dimensions[col_letter].width = 8
                     
     processed_data = output.getvalue()
