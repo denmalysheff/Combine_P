@@ -299,7 +299,7 @@ def process_track_data(uploaded_file, inc_bridge_objects=False, inc_is=False,
     # Формируем структуру без столбца исполнителя
     output_data = {
         'Направление': result_df[col_kodnapr],
-        'Околоток': result_df[col_pd_assess] if col_pd_assess else "",
+        'ПД': result_df[col_pd_assess] if col_pd_assess else "",
         'Путь': result_df['MATCH_ПУТЬ'],
         'Км': result_df['MATCH_КМ'],
         'Оценка': result_df[col_rating],
@@ -308,8 +308,8 @@ def process_track_data(uploaded_file, inc_bridge_objects=False, inc_is=False,
         '2к3ст': result_df['КОЛ_ВО_2_3'],
         '3 ст': result_df['КОЛ_ВО_3'],
         '4 ст': result_df['КОЛ_ВО_4'],
-        'Уст. скорость': result_df['ОГРАНИЧЕНИЕ_СКОРОСТИ'],
-        'Перечень зарегистрированных отступлений путевой геометрии на километре': result_df['ПЕРЕЧЕНЬ_ОТСТУПЛЕНИЙ']
+        'Огр. скорости': result_df['ОГРАНИЧЕНИЕ_СКОРОСТИ'],
+        'Перечень отступлений': result_df['ПЕРЕЧЕНЬ_ОТСТУПЛЕНИЙ']
     }
     final_df = pd.DataFrame(output_data)
 
