@@ -463,7 +463,7 @@ if uploaded_file is not None:
                 st.success("✅ План-График успешно сформирован!")
                 
                 st.download_button(
-                    label="📥 Скачать готовый план для печати А3 (Excel)",
+                    label="📥 Скачать готовый план",
                     data=excel_data,
                     file_name=file_title,
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
