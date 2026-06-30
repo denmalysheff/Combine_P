@@ -1,9 +1,9 @@
 import pandas as pd
 import streamlit as st
 import io
-from datetime import datetime, timedelta
-from openpyxl.styles import Alignment, Font, PatternFill
-from openpyxl.utils import get_column_letter  # Исправление ошибки с MergedCell
+from datetime import datetime
+from openpyxl.styles import Alignment, Font, Border, Side
+from openpyxl.utils import get_column_letter
 
 def normalize_column_name(col):
     """Нормализует имя столбца или вкладки для защиты от ошибок раскладки (РУС/ENG) и пробелов"""
@@ -296,111 +296,127 @@ def process_track_data(uploaded_file, inc_bridge_objects=False, inc_is=False,
         
     result_df['ПЕРЕЧЕНЬ_ОТСТУПЛЕНИЙ'] = result_df['ПЕРЕЧЕНЬ_ОТСТУПЛЕНИЙ'].fillna("")
 
+    # Формируем структуру без столбца исполнителя
     output_data = {
-        'КОДНАПР': result_df[col_kodnapr],
-        'ПД': result_df[col_pd_assess] if col_pd_assess else "",
-        'ПУТЬ': result_df['MATCH_ПУТЬ'],
-        'КМ': result_df['MATCH_КМ'],
-        'ОЦЕНКА': result_df[col_rating],
-        'БАЛЛ': result_df[col_score_assess],
+        'Направление': result_df[col_kodnapr],
+        'Околоток': result_df[col_pd_assess] if col_pd_assess else "",
+        'Путь': result_df['MATCH_ПУТЬ'],
+        'Км': result_df['MATCH_КМ'],
+        'Оценка': result_df[col_rating],
+        'Балл': result_df[col_score_assess],
         '2 ст': result_df['КОЛ_ВО_2'],
         '2к3ст': result_df['КОЛ_ВО_2_3'],
         '3 ст': result_df['КОЛ_ВО_3'],
         '4 ст': result_df['КОЛ_ВО_4'],
-        'ОГРАНИЧЕНИЕ СКОРОСТИ': result_df['ОГРАНИЧЕНИЕ_СКОРОСТИ'],
-        'ПЕРЕЧЕНЬ ОТСТУПЛЕНИЙ': result_df['ПЕРЕЧЕНЬ_ОТСТУПЛЕНИЙ'],
-        'ФАКТИЧЕСКИЙ ИСПОЛНИТЕЛЬ': ""
+        'Уст. скорость': result_df['ОГРАНИЧЕНИЕ_СКОРОСТИ'],
+        'Перечень зарегистрированных отступлений путевой геометрии на километре': result_df['ПЕРЕЧЕНЬ_ОТСТУПЛЕНИЙ']
     }
     final_df = pd.DataFrame(output_data)
 
-    # Календарная сетка на 10 дней
-    start_date = datetime.now()
-    date_cols = [(start_date + timedelta(days=i)).strftime("%d.%m") for i in range(10)]
-    for d_col in date_cols:
-        final_df[d_col] = ""
+    # Добавляем 10 пустых столбцов для графика (без дат в названиях)
+    for i in range(1, 11):
+        final_df[f"График_{i}"] = ""
 
     def pd_sheet_sort_key(name):
         digits = ''.join(c for c in str(name) if c.isdigit())
         return int(digits) if digits else 999
 
-    final_df['ПД'] = final_df['ПД'].astype(str).str.strip()
-    unique_pds = [x for x in final_df['ПД'].unique() if x not in ['', 'nan', 'None']]
+    final_df['Околоток'] = final_df['Околоток'].astype(str).str.strip()
+    unique_pds = [x for x in final_df['Околоток'].unique() if x not in ['', 'nan', 'None']]
     unique_pds_sorted = sorted(unique_pds, key=pd_sheet_sort_key)
 
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         for pd_name in unique_pds_sorted:
-            df_pd = final_df[final_df['ПД'] == pd_name].copy()
-            df_pd.sort_values(by=['КОДНАПР', 'ПУТЬ', 'КМ'], ascending=[True, True, True], inplace=True)
+            df_pd = final_df[final_df['Околоток'] == pd_name].copy()
+            df_pd.sort_values(by=['Направление', 'Путь', 'Км'], ascending=[True, True, True], inplace=True)
             
             sheet_title = f"ПД-{pd_name}" if not str(pd_name).startswith('ПД') else str(pd_name)
-            
-            # Таблица пишется со строки 4 (индекс 3) для сохранения места под шапку листа
             df_pd.to_excel(writer, sheet_name=sheet_title, index=False, startrow=3)
             
             workbook = writer.book
             worksheet = workbook[sheet_title]
             
-            # Ориентация под широкий лист А3
             worksheet.page_setup.orientation = worksheet.ORIENTATION_LANDSCAPE
             worksheet.page_setup.paperSize = worksheet.PAPERSIZE_A3
             
+            # Настройки стилей текста
             align_header = Alignment(horizontal='center', vertical='center', wrap_text=True)
             align_center = Alignment(horizontal='center', vertical='center')
             align_left = Alignment(horizontal='left', vertical='center')
             
             font_title = Font(name='Arial', size=16, bold=True)
-            font_bold = Font(name='Arial', size=11, bold=True)
-            font_normal = Font(name='Arial', size=11, bold=False)
-            fill_graph_header = PatternFill(start_color="F2F7FA", end_color="F2F7FA", fill_type="solid")
+            font_header = Font(name='Arial', size=10, bold=False)  # Нежирная аккуратная шапка таблицы
+            font_bold_cell = Font(name='Arial', size=11, bold=True)
+            font_normal_cell = Font(name='Arial', size=11, bold=False)
             
-            # Объединение и создание заголовка листа (строки 1-2)
+            # Настройки рамок (Сетка)
+            thin_side = Side(border_style="thin", color="000000")
+            thick_side = Side(border_style="medium", color="000000")
+            border_cell = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+            
+            # Крупный заголовок листа (строки 1-2)
             worksheet.merge_cells(start_row=1, start_column=1, end_row=2, end_column=worksheet.max_column)
             title_cell = worksheet.cell(row=1, column=1)
             title_cell.value = f"ПЛАН УСТРАНЕНИЯ ОТСТУПЛЕНИЙ {sheet_title.upper()}"
             title_cell.font = font_title
             title_cell.alignment = align_center
             
-            worksheet.row_dimensions[4].height = 40  # Высота шапки таблицы
+            worksheet.row_dimensions[4].height = 35  # Высота шапки таблицы
             
             # Оформление заголовков таблицы (строка 4)
             for col_idx in range(1, worksheet.max_column + 1):
                 cell = worksheet.cell(row=4, column=col_idx)
                 cell.alignment = align_header
-                cell.font = font_bold
-                if col_idx > 13:
-                    cell.fill = fill_graph_header
+                cell.font = font_header
+                cell.border = border_cell
+                
+                # Затираем текст "График_Х" для календарной сетки, оставляя ячейки пустыми под ручную запись
+                if col_idx > 12:
+                    cell.value = ""
             
             # Оформление строк данных (начиная со строки 5)
             for row_idx in range(5, worksheet.max_row + 1):
-                worksheet.row_dimensions[row_idx].height = 24  # Комфортная высота строк для А3
+                worksheet.row_dimensions[row_idx].height = 24
                 rating_value = str(worksheet.cell(row=row_idx, column=5).value).strip()
                 is_rating_2 = (rating_value == '2' or rating_value == '2.0')
                 
                 for col_idx in range(1, worksheet.max_column + 1):
                     cell = worksheet.cell(row=row_idx, column=col_idx)
-                    if col_idx == 12 or col_idx == 13:
+                    cell.border = border_cell
+                    
+                    if col_idx == 12:
                         cell.alignment = align_left
                     else:
                         cell.alignment = align_center
-                    cell.font = font_bold if is_rating_2 else font_normal
+                        
+                    cell.font = font_bold_cell if is_rating_2 else font_normal_cell
 
-            # Безопасная настройка ширины столбцов по индексам (обход MergedCell)
+            # Применение КРУПНОЙ внешней рамки на весь печатный блок таблицы (строки 4..max_row, колонки 1..max_col)
+            for r in range(4, worksheet.max_row + 1):
+                for c in range(1, worksheet.max_column + 1):
+                    cell = worksheet.cell(row=r, column=c)
+                    # Сборка составной рамки для границ контура
+                    l = thick_side if c == 1 else cell.border.left
+                    rt = thick_side if c == worksheet.max_column else cell.border.right
+                    t = thick_side if r == 4 else cell.border.top
+                    b = thick_side if r == worksheet.max_row else cell.border.bottom
+                    cell.border = Border(left=l, right=rt, top=t, bottom=b)
+
+            # Безопасная настройка ширины столбцов под А3
             for col_idx in range(1, worksheet.max_column + 1):
                 col_letter = get_column_letter(col_idx)
                 
                 if col_idx in [1, 2, 5, 6]:
                     worksheet.column_dimensions[col_letter].width = 13
                 elif col_idx in [3, 4, 7, 8, 9, 10]:
-                    worksheet.column_dimensions[col_letter].width = 10
-                elif col_idx == 11:  # Ограничение скорости
-                    worksheet.column_dimensions[col_letter].width = 15
-                elif col_idx == 12:  # Перечень отступлений
-                    worksheet.column_dimensions[col_letter].width = 65
-                elif col_idx == 13:  # Фактический исполнитель
-                    worksheet.column_dimensions[col_letter].width = 28
-                else:  # Календарные даты графика
-                    worksheet.column_dimensions[col_letter].width = 8
+                    worksheet.column_dimensions[col_letter].width = 9
+                elif col_idx == 11:  # Скорость
+                    worksheet.column_dimensions[col_letter].width = 14
+                elif col_idx == 12:  # Большое описание неисправностей километра
+                    worksheet.column_dimensions[col_letter].width = 75
+                else:  # Столбцы под ручные даты
+                    worksheet.column_dimensions[col_letter].width = 7
                     
     processed_data = output.getvalue()
     return processed_data
@@ -428,7 +444,7 @@ with col2:
 
 if uploaded_file is not None:
     if st.button("Сформировать План-График ЧП-22", type="primary"):
-        with st.spinner("⏳ Выполняется формирование печатных форм для околотков..."):
+        with st.spinner("⏳ Выполняется формирование строгих печатных форм для А3..."):
             try:
                 excel_data = process_track_data(
                     uploaded_file, 
