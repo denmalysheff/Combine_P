@@ -296,10 +296,10 @@ def process_track_data(uploaded_file, inc_bridge_objects=False, inc_is=False,
         
     result_df['ПЕРЕЧЕНЬ_ОТСТУПЛЕНИЙ'] = result_df['ПЕРЕЧЕНЬ_ОТСТУПЛЕНИЙ'].fillna("")
 
-    # Формируем структуру без столбца исполнителя
+    # Названия колонок словаря и имя ключевого столбца 'Околоток' теперь синхронизированы
     output_data = {
         'Направление': result_df[col_kodnapr],
-        'ПД': result_df[col_pd_assess] if col_pd_assess else "",
+        'Околоток': result_df[col_pd_assess] if col_pd_assess else "",
         'Путь': result_df['MATCH_ПУТЬ'],
         'Км': result_df['MATCH_КМ'],
         'Оценка': result_df[col_rating],
@@ -308,12 +308,12 @@ def process_track_data(uploaded_file, inc_bridge_objects=False, inc_is=False,
         '2к3ст': result_df['КОЛ_ВО_2_3'],
         '3 ст': result_df['КОЛ_ВО_3'],
         '4 ст': result_df['КОЛ_ВО_4'],
-        'Огр. скорости': result_df['ОГРАНИЧЕНИЕ_СКОРОСТИ'],
-        'Перечень отступлений': result_df['ПЕРЕЧЕНЬ_ОТСТУПЛЕНИЙ']
+        'Уст. скорость': result_df['ОГРАНИЧЕНИЕ_СКОРОСТИ'],
+        'Перечень зарегистрированных отступлений путевой геометрии на километре': result_df['ПЕРЕЧЕНЬ_ОТСТУПЛЕНИЙ']
     }
     final_df = pd.DataFrame(output_data)
 
-    # Добавляем 10 пустых столбцов для графика (без дат в названиях)
+    # 10 пустых столбцов календарной сетки без названий
     for i in range(1, 11):
         final_df[f"График_{i}"] = ""
 
@@ -340,29 +340,27 @@ def process_track_data(uploaded_file, inc_bridge_objects=False, inc_is=False,
             worksheet.page_setup.orientation = worksheet.ORIENTATION_LANDSCAPE
             worksheet.page_setup.paperSize = worksheet.PAPERSIZE_A3
             
-            # Настройки стилей текста
             align_header = Alignment(horizontal='center', vertical='center', wrap_text=True)
             align_center = Alignment(horizontal='center', vertical='center')
             align_left = Alignment(horizontal='left', vertical='center')
             
             font_title = Font(name='Arial', size=16, bold=True)
-            font_header = Font(name='Arial', size=10, bold=False)  # Нежирная аккуратная шапка таблицы
+            font_header = Font(name='Arial', size=10, bold=False)  # Аккуратная тонкая шапка таблицы
             font_bold_cell = Font(name='Arial', size=11, bold=True)
             font_normal_cell = Font(name='Arial', size=11, bold=False)
             
-            # Настройки рамок (Сетка)
             thin_side = Side(border_style="thin", color="000000")
             thick_side = Side(border_style="medium", color="000000")
             border_cell = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
             
-            # Крупный заголовок листа (строки 1-2)
+            # Объединение и создание заголовка листа (строки 1-2)
             worksheet.merge_cells(start_row=1, start_column=1, end_row=2, end_column=worksheet.max_column)
             title_cell = worksheet.cell(row=1, column=1)
             title_cell.value = f"ПЛАН УСТРАНЕНИЯ ОТСТУПЛЕНИЙ {sheet_title.upper()}"
             title_cell.font = font_title
             title_cell.alignment = align_center
             
-            worksheet.row_dimensions[4].height = 35  # Высота шапки таблицы
+            worksheet.row_dimensions[4].height = 35
             
             # Оформление заголовков таблицы (строка 4)
             for col_idx in range(1, worksheet.max_column + 1):
@@ -371,7 +369,7 @@ def process_track_data(uploaded_file, inc_bridge_objects=False, inc_is=False,
                 cell.font = font_header
                 cell.border = border_cell
                 
-                # Затираем текст "График_Х" для календарной сетки, оставляя ячейки пустыми под ручную запись
+                # Полное скрытие технических имен График_Х для пустых ручных столбцов
                 if col_idx > 12:
                     cell.value = ""
             
@@ -392,18 +390,17 @@ def process_track_data(uploaded_file, inc_bridge_objects=False, inc_is=False,
                         
                     cell.font = font_bold_cell if is_rating_2 else font_normal_cell
 
-            # Применение КРУПНОЙ внешней рамки на весь печатный блок таблицы (строки 4..max_row, колонки 1..max_col)
+            # Применение МАСШТАБНОЙ КРУПНОЙ рамки на весь внешний периметр печатного блока
             for r in range(4, worksheet.max_row + 1):
                 for c in range(1, worksheet.max_column + 1):
                     cell = worksheet.cell(row=r, column=c)
-                    # Сборка составной рамки для границ контура
                     l = thick_side if c == 1 else cell.border.left
                     rt = thick_side if c == worksheet.max_column else cell.border.right
                     t = thick_side if r == 4 else cell.border.top
                     b = thick_side if r == worksheet.max_row else cell.border.bottom
                     cell.border = Border(left=l, right=rt, top=t, bottom=b)
 
-            # Безопасная настройка ширины столбцов под А3
+            # Точная настройка геометрии ширины под А3 формат
             for col_idx in range(1, worksheet.max_column + 1):
                 col_letter = get_column_letter(col_idx)
                 
@@ -411,11 +408,11 @@ def process_track_data(uploaded_file, inc_bridge_objects=False, inc_is=False,
                     worksheet.column_dimensions[col_letter].width = 13
                 elif col_idx in [3, 4, 7, 8, 9, 10]:
                     worksheet.column_dimensions[col_letter].width = 9
-                elif col_idx == 11:  # Скорость
+                elif col_idx == 11:
                     worksheet.column_dimensions[col_letter].width = 14
-                elif col_idx == 12:  # Большое описание неисправностей километра
+                elif col_idx == 12:
                     worksheet.column_dimensions[col_letter].width = 75
-                else:  # Столбцы под ручные даты
+                else:
                     worksheet.column_dimensions[col_letter].width = 7
                     
     processed_data = output.getvalue()
@@ -433,7 +430,7 @@ col1, col2 = st.columns(2)
 
 with col1:
     inc_bridge_objects = st.checkbox("Включить выборку просадок > 20 мм на МОСТАХ или в Обкатке (МОСТ=1 / ОБК=1)", value=False)
-    inc_is = st.checkbox("Включить просадки на изолирующих стыках (ИС)", value=False)
+    inc_is = st.checkbox("Включить просадки на изолированных стыках (ИС)", value=False)
     inc_dnprof = st.checkbox("Включить длинные профильные неровности (ДНПРОФ)", value=False)
     inc_pru = st.checkbox("Включить отклонения от уровня в кривых (ПРУ)", value=False)
 
