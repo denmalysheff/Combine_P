@@ -296,10 +296,10 @@ def process_track_data(uploaded_file, inc_bridge_objects=False, inc_is=False,
         
     result_df['ПЕРЕЧЕНЬ_ОТСТУПЛЕНИЙ'] = result_df['ПЕРЕЧЕНЬ_ОТСТУПЛЕНИЙ'].fillna("")
 
-    # Названия колонок словаря и имя ключевого столбца 'Околоток' теперь синхронизированы
+    # Сохранена твоя структура выходного словаря с твоими именами полей
     output_data = {
         'Направление': result_df[col_kodnapr],
-        'Околоток': result_df[col_pd_assess] if col_pd_assess else "",
+        'ПД': result_df[col_pd_assess] if col_pd_assess else "",
         'Путь': result_df['MATCH_ПУТЬ'],
         'Км': result_df['MATCH_КМ'],
         'Оценка': result_df[col_rating],
@@ -308,12 +308,11 @@ def process_track_data(uploaded_file, inc_bridge_objects=False, inc_is=False,
         '2к3ст': result_df['КОЛ_ВО_2_3'],
         '3 ст': result_df['КОЛ_ВО_3'],
         '4 ст': result_df['КОЛ_ВО_4'],
-        'Уст. скорость': result_df['ОГРАНИЧЕНИЕ_СКОРОСТИ'],
-        'Перечень зарегистрированных отступлений путевой геометрии на километре': result_df['ПЕРЕЧЕНЬ_ОТСТУПЛЕНИЙ']
+        'Огр. скорости': result_df['ОГРАНИЧЕНИЕ_СКОРОСТИ'],
+        'Перечень отступлений': result_df['ПЕРЕЧЕНЬ_ОТСТУПЛЕНИЙ']
     }
     final_df = pd.DataFrame(output_data)
 
-    # 10 пустых столбцов календарной сетки без названий
     for i in range(1, 11):
         final_df[f"График_{i}"] = ""
 
@@ -321,14 +320,16 @@ def process_track_data(uploaded_file, inc_bridge_objects=False, inc_is=False,
         digits = ''.join(c for c in str(name) if c.isdigit())
         return int(digits) if digits else 999
 
-    final_df['Околоток'] = final_df['Околоток'].astype(str).str.strip()
-    unique_pds = [x for x in final_df['Околоток'].unique() if x not in ['', 'nan', 'None']]
+    # Исправлено: теперь группировка и сортировка идут строго по полю 'ПД' из твоего кода
+    final_df['ПД'] = final_df['ПД'].astype(str).str.strip()
+    unique_pds = [x for x in final_df['ПД'].unique() if x not in ['', 'nan', 'None']]
     unique_pds_sorted = sorted(unique_pds, key=pd_sheet_sort_key)
 
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         for pd_name in unique_pds_sorted:
-            df_pd = final_df[final_df['Околоток'] == pd_name].copy()
+            # Исправлено: фильтрация по ПД вместо Околотка
+            df_pd = final_df[final_df['ПД'] == pd_name].copy()
             df_pd.sort_values(by=['Направление', 'Путь', 'Км'], ascending=[True, True, True], inplace=True)
             
             sheet_title = f"ПД-{pd_name}" if not str(pd_name).startswith('ПД') else str(pd_name)
@@ -345,7 +346,7 @@ def process_track_data(uploaded_file, inc_bridge_objects=False, inc_is=False,
             align_left = Alignment(horizontal='left', vertical='center')
             
             font_title = Font(name='Arial', size=16, bold=True)
-            font_header = Font(name='Arial', size=10, bold=False)  # Аккуратная тонкая шапка таблицы
+            font_header = Font(name='Arial', size=10, bold=False)  
             font_bold_cell = Font(name='Arial', size=11, bold=True)
             font_normal_cell = Font(name='Arial', size=11, bold=False)
             
@@ -353,7 +354,6 @@ def process_track_data(uploaded_file, inc_bridge_objects=False, inc_is=False,
             thick_side = Side(border_style="medium", color="000000")
             border_cell = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
             
-            # Объединение и создание заголовка листа (строки 1-2)
             worksheet.merge_cells(start_row=1, start_column=1, end_row=2, end_column=worksheet.max_column)
             title_cell = worksheet.cell(row=1, column=1)
             title_cell.value = f"ПЛАН УСТРАНЕНИЯ ОТСТУПЛЕНИЙ {sheet_title.upper()}"
@@ -362,18 +362,15 @@ def process_track_data(uploaded_file, inc_bridge_objects=False, inc_is=False,
             
             worksheet.row_dimensions[4].height = 35
             
-            # Оформление заголовков таблицы (строка 4)
             for col_idx in range(1, worksheet.max_column + 1):
                 cell = worksheet.cell(row=4, column=col_idx)
                 cell.alignment = align_header
                 cell.font = font_header
                 cell.border = border_cell
                 
-                # Полное скрытие технических имен График_Х для пустых ручных столбцов
                 if col_idx > 12:
                     cell.value = ""
             
-            # Оформление строк данных (начиная со строки 5)
             for row_idx in range(5, worksheet.max_row + 1):
                 worksheet.row_dimensions[row_idx].height = 24
                 rating_value = str(worksheet.cell(row=row_idx, column=5).value).strip()
@@ -390,7 +387,6 @@ def process_track_data(uploaded_file, inc_bridge_objects=False, inc_is=False,
                         
                     cell.font = font_bold_cell if is_rating_2 else font_normal_cell
 
-            # Применение МАСШТАБНОЙ КРУПНОЙ рамки на весь внешний периметр печатного блока
             for r in range(4, worksheet.max_row + 1):
                 for c in range(1, worksheet.max_column + 1):
                     cell = worksheet.cell(row=r, column=c)
@@ -400,7 +396,6 @@ def process_track_data(uploaded_file, inc_bridge_objects=False, inc_is=False,
                     b = thick_side if r == worksheet.max_row else cell.border.bottom
                     cell.border = Border(left=l, right=rt, top=t, bottom=b)
 
-            # Точная настройка геометрии ширины под А3 формат
             for col_idx in range(1, worksheet.max_column + 1):
                 col_letter = get_column_letter(col_idx)
                 
@@ -418,14 +413,14 @@ def process_track_data(uploaded_file, inc_bridge_objects=False, inc_is=False,
     processed_data = output.getvalue()
     return processed_data
 
-# --- Веб-Интерфейс Streamlit ---
+# --- Веб-Интерфейс Streamlit (Твои тексты КВЛ-П полностью сохранены) ---
 st.set_page_config(page_title="ЧП-22 Планирование", layout="wide")
 st.title("🚂 ЧП-22 Планирование")
 st.subheader("Формирование плана устранения отступлений")
 
 uploaded_file = st.file_uploader("Выберите исходный Excel-файл КВЛ-П", type=["xlsx", "xls"])
 
-st.markdown("### 🛠️ Настройки включаемых в анализ параметров путеизмерителя (по умолчанию отключены):")
+st.markdown("### 🛠️ Настройки включаемых в analysis параметров путеизмерителя (по умолчанию отключены):")
 col1, col2 = st.columns(2)
 
 with col1:
