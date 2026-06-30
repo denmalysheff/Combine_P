@@ -3,7 +3,6 @@ import streamlit as st
 import io
 from datetime import datetime, timedelta
 from openpyxl.styles import Alignment, Font, PatternFill
-from openpyxl.worksheet.datavalidation import DataValidation
 
 def normalize_column_name(col):
     """Нормализует имя столбца или вкладки для защиты от ошибок раскладки (РУС/ENG) и пробелов"""
@@ -46,7 +45,7 @@ def safe_int(value, default=0):
     except ValueError:
         return default
 
-def process_track_data(uploaded_file, include_bridge_objects=True, exclude_is=False,
+def process_track_data(uploaded_file, inc_bridge_objects=False, inc_is=False,
                        inc_dnprof=False, inc_pru=False, inc_anp=False, inc_zaz=False, inc_rshk=False):
     try:
         xl = pd.ExcelFile(uploaded_file)
@@ -135,7 +134,6 @@ def process_track_data(uploaded_file, include_bridge_objects=True, exclude_is=Fa
     df_defects['IS_ZAZ_VAL'] = df_defects['TMP_DEF_UPPER'] == 'ЗАЗ'
     df_defects['IS_RSHK_VAL'] = df_defects['TMP_DEF_UPPER'] == 'РШК'
 
-    # Переменная-флаг: является ли запись техническим/доп. параметром
     df_defects['IS_SPECIAL_PARAM'] = (
         df_defects['IS_DNPROF_VAL'] | df_defects['IS_PRU_VAL'] | 
         df_defects['IS_ANP_VAL'] | df_defects['IS_ZAZ_VAL'] | df_defects['IS_RSHK_VAL']
@@ -144,7 +142,7 @@ def process_track_data(uploaded_file, include_bridge_objects=True, exclude_is=Fa
     # Фильтр по чекбоксам: оставляем только то, что пользователь ВКЛЮЧИЛ
     def keep_by_checkbox(row):
         if not row['IS_SPECIAL_PARAM']:
-            return True # Обычные дефекты оставляем всегда
+            return True 
         if row['IS_DNPROF_VAL'] and inc_dnprof: return True
         if row['IS_PRU_VAL'] and inc_pru: return True
         if row['IS_ANP_VAL'] and inc_anp: return True
@@ -156,7 +154,7 @@ def process_track_data(uploaded_file, include_bridge_objects=True, exclude_is=Fa
 
     # --- ПРОВЕРКА ОГРАНИЧЕНИЙ ДЛЯ 2 СТЕПЕНИ (2к3ст) ---
     def check_is_2_pr(row):
-        if row['IS_SPECIAL_PARAM']: return False # Не ведем счет степеней для доп параметров
+        if row['IS_SPECIAL_PARAM']: return False 
         if safe_int(row['INT_СТЕПЕНЬ']) != 2: return False
         if col_pr:
             pr_val = str(row[col_pr]).strip().upper()
@@ -168,7 +166,6 @@ def process_track_data(uploaded_file, include_bridge_objects=True, exclude_is=Fa
             except ValueError: pass
         return False
 
-    # Расчет степеней только для классических неисправностей путевой геометрии
     df_defects['IS_2_PR'] = df_defects.apply(check_is_2_pr, axis=1)
     df_defects['IS_2_REGULAR'] = (df_defects['INT_СТЕПЕНЬ'] == 2) & (~df_defects['IS_2_PR']) & (~df_defects['IS_SPECIAL_PARAM'])
     df_defects['IS_3'] = (df_defects['INT_СТЕПЕНЬ'] == 3) & (~df_defects['IS_SPECIAL_PARAM'])
@@ -176,8 +173,8 @@ def process_track_data(uploaded_file, include_bridge_objects=True, exclude_is=Fa
 
     # --- ДОПОЛНИТЕЛЬНЫЕ ФИЛЬТРЫ ВЫБОРКИ ---
     if col_defect:
-        # 1. Просадки на ИС
-        if col_is and not exclude_is:
+        # 1. Включить просадки на ИС
+        if col_is and inc_is:
             df_defects['IS_PROSADKA_IS'] = (
                 df_defects['TMP_DEF_UPPER'].isin(['ПР.Л', 'ПР.П', 'ПР Л', 'ПР П']) & 
                 (df_defects['INT_СТЕПЕНЬ'] > 1) & 
@@ -195,8 +192,8 @@ def process_track_data(uploaded_file, include_bridge_objects=True, exclude_is=Fa
         else:
             df_defects['IS_USH_CRITICAL'] = False
 
-        # 3. Просадки > 20 мм на мостах или объектах
-        if include_bridge_objects and col_ampl and (col_most or col_obk):
+        # 3. Включить просадки > 20 мм на мостах или объектах
+        if inc_bridge_objects and col_ampl and (col_most or col_obk):
             is_bridge = df_defects[col_most].apply(safe_int) == 1 if col_most else False
             is_object = df_defects[col_obk].apply(safe_int) == 1 if col_obk else False
             df_defects['IS_BRIDGE_OBJECT_CRITICAL'] = (
@@ -210,7 +207,6 @@ def process_track_data(uploaded_file, include_bridge_objects=True, exclude_is=Fa
         df_defects['IS_USH_CRITICAL'] = False
         df_defects['IS_BRIDGE_OBJECT_CRITICAL'] = False
 
-    # Сборка валидных записей
     df_valid_defects = df_defects[
         df_defects['INT_СТЕПЕНЬ'].isin([2, 3, 4]) | 
         df_defects['IS_PROSADKA_IS'] | 
@@ -225,14 +221,12 @@ def process_track_data(uploaded_file, include_bridge_objects=True, exclude_is=Fa
         count_3 = group['IS_3'].sum()
         count_4 = group['IS_4'].sum()
         
-        # Подсчет количества спец. параметров на километре
         dnprof_c = group['IS_DNPROF_VAL'].sum()
         pru_c = group['IS_PRU_VAL'].sum()
         anp_c = group['IS_ANP_VAL'].sum()
         zaz_c = group['IS_ZAZ_VAL'].sum()
         rshk_c = group['IS_RSHK_VAL'].sum()
         
-        # Выделяем обычные дефекты для поштучного вывода в текст
         text_rows = group[
             (group['IS_3'] | group['IS_4'] | group['IS_2_PR'] | 
              group['IS_PROSADKA_IS'] | group['IS_USH_CRITICAL'] | group['IS_BRIDGE_OBJECT_CRITICAL']) & 
@@ -262,7 +256,6 @@ def process_track_data(uploaded_file, include_bridge_objects=True, exclude_is=Fa
             
         final_text = ", ".join(list_desc) if list_desc else ""
         
-        # Сборка агрегированных счетчиков в конец текстового описания километра
         counts_list = []
         if dnprof_c > 0: counts_list.append(f"Днпроф - {dnprof_c} шт.")
         if pru_c > 0: counts_list.append(f"ПрУ - {pru_c} шт.")
@@ -296,7 +289,6 @@ def process_track_data(uploaded_file, include_bridge_objects=True, exclude_is=Fa
         result_df['КОЛ_ВО_4'] = 0
         result_df['ПЕРЕЧЕНЬ_ОТСТУПЛЕНИЙ'] = ""
 
-    # Сокрытие нулей в столбцах степеней
     for col in ['КОЛ_ВО_2', 'КОЛ_ВО_2_3', 'КОЛ_ВО_3', 'КОЛ_ВО_4']:
         result_df[col] = result_df[col].fillna(0).astype(int)
         result_df[col] = result_df[col].apply(lambda x: "" if x == 0 else x)
@@ -341,30 +333,47 @@ def process_track_data(uploaded_file, include_bridge_objects=True, exclude_is=Fa
             df_pd.sort_values(by=['КОДНАПР', 'ПУТЬ', 'КМ'], ascending=[True, True, True], inplace=True)
             
             sheet_title = f"ПД-{pd_name}" if not str(pd_name).startswith('ПД') else str(pd_name)
-            df_pd.to_excel(writer, sheet_name=sheet_title, index=False)
+            
+            # Сдвигаем таблицу вниз на 3 строки для создания крупной шапки
+            df_pd.to_excel(writer, sheet_name=sheet_title, index=False, startrow=3)
             
             workbook = writer.book
             worksheet = workbook[sheet_title]
+            
+            # Настройка параметров печати под широкий формат (А3 / А4 Альбомная)
             worksheet.page_setup.orientation = worksheet.ORIENTATION_LANDSCAPE
-            worksheet.page_setup.paperSize = worksheet.PAPERSIZE_A4
+            worksheet.page_setup.paperSize = worksheet.PAPERSIZE_A3
             
             align_header = Alignment(horizontal='center', vertical='center', wrap_text=True)
             align_center = Alignment(horizontal='center', vertical='center')
             align_left = Alignment(horizontal='left', vertical='center')
             
-            font_bold = Font(name='Arial', size=10, bold=True)
-            font_normal = Font(name='Arial', size=10, bold=False)
-            fill_graph_header = PatternFill(start_color="E6F2FF", end_color="E6F2FF", fill_type="solid")
+            font_title = Font(name='Arial', size=16, bold=True)
+            font_bold = Font(name='Arial', size=11, bold=True)
+            font_normal = Font(name='Arial', size=11, bold=False)
+            fill_graph_header = PatternFill(start_color="F2F7FA", end_color="F2F7FA", fill_type="solid")
             
-            worksheet.row_dimensions[1].height = 45
+            # 1. Создание крупного текстового заголовка вкладки
+            worksheet.merge_cells(start_row=1, start_column=1, end_row=2, end_column=worksheet.max_column)
+            title_cell = worksheet.cell(row=1, column=1)
+            title_cell.value = f"ПЛАН УСТРАНЕНИЯ ОТСТУПЛЕНИЙ {sheet_title.upper()}"
+            title_cell.font = font_title
+            title_cell.alignment = align_center
+            
+            # Настройка высоты строк
+            worksheet.row_dimensions[4].height = 40 # Строка заголовков таблицы
+            
+            # Оформление шапки таблицы
             for col_idx in range(1, worksheet.max_column + 1):
-                cell = worksheet.cell(row=1, column=col_idx)
+                cell = worksheet.cell(row=4, column=col_idx)
                 cell.alignment = align_header
                 cell.font = font_bold
                 if col_idx > 13:
                     cell.fill = fill_graph_header
             
-            for row_idx in range(2, worksheet.max_row + 1):
+            # Оформление строк с данными
+            for row_idx in range(5, worksheet.max_row + 1):
+                worksheet.row_dimensions[row_idx].height = 24 # Увеличенная высота под А3
                 rating_value = str(worksheet.cell(row=row_idx, column=5).value).strip()
                 is_rating_2 = (rating_value == '2' or rating_value == '2.0')
                 
@@ -376,30 +385,22 @@ def process_track_data(uploaded_file, include_bridge_objects=True, exclude_is=Fa
                         cell.alignment = align_center
                     cell.font = font_bold if is_rating_2 else font_normal
 
+            # Оптимальная ширина ячеек для полной читаемости на печати
             for col in worksheet.columns:
                 col_letter = col[0].column_letter
                 col_idx = col[0].column
-                if col_idx <= 11:
+                if col_idx in [1, 2, 5, 6]:
+                    worksheet.column_dimensions[col_letter].width = 13
+                elif col_idx in [3, 4, 7, 8, 9, 10]:
                     worksheet.column_dimensions[col_letter].width = 10
-                elif col_idx == 12:
-                    worksheet.column_dimensions[col_letter].width = 50
-                elif col_idx == 13:
-                    worksheet.column_dimensions[col_letter].width = 24
-                else:
-                    worksheet.column_dimensions[col_letter].width = 7
-
-            # Выпадающий список исполнителей (ПД-1...ПД-15, ППР-3, ППР-5)
-            pds_list = ",".join([f"ПД-{i}" for i in range(1, 16)])
-            executors_formula = f'"{pds_list},ППР-3,ППР-5,ПМС,Мостовики"'
-            
-            dv = DataValidation(type="list", formula1=executors_formula, allow_blank=True)
-            dv.error = 'Выберите значение из списка'
-            dv.errorTitle = 'Ошибочный ввод'
-            dv.prompt = 'Укажите ответственного за устранение'
-            dv.promptTitle = 'Исполнитель'
-            
-            worksheet.add_data_validation(dv)
-            dv.add(f"M2:M{worksheet.max_row}")
+                elif col_idx == 11: # Ограничение скорости
+                    worksheet.column_dimensions[col_letter].width = 15
+                elif col_idx == 12: # Перечень отступлений (делаем широким под А3)
+                    worksheet.column_dimensions[col_letter].width = 65
+                elif col_idx == 13: # Фактический исполнитель
+                    worksheet.column_dimensions[col_letter].width = 28
+                else: # Даты
+                    worksheet.column_dimensions[col_letter].width = 8
                     
     processed_data = output.getvalue()
     return processed_data
@@ -411,33 +412,28 @@ st.subheader("Аналитика вагонных данных и автомат
 
 uploaded_file = st.file_uploader("Выберите исходный Excel-файл с вагона", type=["xlsx", "xls"])
 
-st.markdown("### 🛠️ Настройки включаемых в анализ параметров путеизмерителя:")
+st.markdown("### 🛠️ Настройки включаемых в анализ параметров путеизмерителя (по умолчанию отключены):")
 col1, col2 = st.columns(2)
 
 with col1:
-    include_bridge_objects = st.checkbox("Включить выборку просадок > 20 мм на МОСТАХ и ОБЪЕКТАХ (МОСТ=1 / ОБК=1)", value=True)
-    exclude_is = st.checkbox("Исключить просадки на изолированных стыках (ИС)", value=False)
-    st.write("")
-    st.markdown("**Дополнительные параметры (выводятся общим количеством):**")
+    inc_bridge_objects = st.checkbox("Включить выборку просадок > 20 мм на МОСТАХ и ОБЪЕКТАХ (МОСТ=1 / ОБК=1)", value=False)
+    inc_is = st.checkbox("Включить просадки на изолированных стыках (ИС)", value=False)
     inc_dnprof = st.checkbox("Включить продольный профиль (ДНПРОФ)", value=False)
     inc_pru = st.checkbox("Включить просадку уровня на сопряжении (ПРУ)", value=False)
 
 with col2:
-    st.write("")
-    st.write("")
-    st.write("")
     inc_anp = st.checkbox("Включить уклон отвода возвышения (АНП)", value=False)
     inc_zaz = st.checkbox("Включить стыковые зазоры (ЗАЗ)", value=False)
     inc_rshk = st.checkbox("Включить регулировку ширины колеи (РШК)", value=False)
 
 if uploaded_file is not None:
     if st.button("Сформировать План-График ЧП-22", type="primary"):
-        with st.spinner("⏳ Выполняется расчет и компоновка околотков... Пожалуйста, подождите."):
+        with st.spinner("⏳ Выполняется формирование печатных форм для околотков..."):
             try:
                 excel_data = process_track_data(
                     uploaded_file, 
-                    include_bridge_objects=include_bridge_objects,
-                    exclude_is=exclude_is,
+                    inc_bridge_objects=inc_bridge_objects,
+                    inc_is=inc_is,
                     inc_dnprof=inc_dnprof,
                     inc_pru=inc_pru,
                     inc_anp=inc_anp,
@@ -451,7 +447,7 @@ if uploaded_file is not None:
                 st.success("✅ План-График успешно сформирован!")
                 
                 st.download_button(
-                    label="📥 Скачать готовый План-График (Excel)",
+                    label="📥 Скачать готовый план для печати А3 (Excel)",
                     data=excel_data,
                     file_name=file_title,
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
